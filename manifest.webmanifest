@@ -1,0 +1,16 @@
+{
+  "name": "8-Bit Spider Dodge",
+  "short_name": "Spiders",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0c0f1a",
+  "theme_color": "#0c0f1a",
+  "icons": [
+    {
+      "src": "assets/icon-768.png",
+      "sizes": "768x768",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="assets/icon-768.png">
+  <meta name="theme-color" content="#0c0f1a">
+  <title>8-Bit Spider Dodge</title>
+  <style>
+    :root {
+      --bg-1: #0c0f1a;
+      --bg-2: #1a1f33;
+      --accent: #f5d100;
+      --accent-2: #5af5f0;
+      --player: #3cf56b;
+      --player-shadow: #1fb152;
+      --spider: #f55353;
+      --spider-shadow: #bf3737;
+      --thread: #e2e2e2;
+      --ground: #2b3047;
+      --ground-shadow: #1b2036;
+    }
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+    body {
+      margin: 0;
+      min-height: 100svh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at 30% 20%, #1c2240 0, #0b0d18 60%);
+      color: #e8ecff;
+      font-family: "Press Start 2P", "VT323", "Courier New", monospace;
+      letter-spacing: 0.5px;
+      image-rendering: pixelated;
+    }
+    .frame {
+      width: min(620px, 100vw - 24px);
+      max-height: 100svh;
+      background: linear-gradient(135deg, var(--bg-2), var(--bg-1));
+      border: 6px solid #0a0c14;
+      box-shadow:
+        0 0 0 4px #121629,
+        0 16px 40px rgba(0, 0, 0, 0.5);
+      padding: 12px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .title {
+      color: var(--accent);
+      text-shadow: 2px 2px 0 #111;
+    }
+    .game-wrap {
+      width: 540px;
+      height: 900px;
+      touch-action: none;
+    }
+    canvas {
+      width: 540px;
+      height: 900px;
+      background: repeating-linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.02),
+        rgba(255, 255, 255, 0.02) 8px,
+        transparent 8px,
+        transparent 16px
+      );
+      border: 4px solid #101426;
+      display: block;
+      image-rendering: pixelated;
+    }
+    .footer {
+      margin-top: 8px;
+      font-size: 10px;
+      color: #cbd5ff;
+    }
+    .footer strong { color: var(--accent-2); }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="header">
+      <div class="title">8-BIT SPIDER DODGE</div>
+      <div id="hud">Time: 0.0s</div>
+    </div>
+    <div class="game-wrap">
+      <canvas id="game" width="540" height="900"></canvas>
+    </div>
+    <div class="footer">
+      Move with <strong>A/D</strong> or <strong>←/→</strong>. Avoid the spiders. Press <strong>R</strong> to restart.
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const hud = document.getElementById("hud");
+    const palette = {
+      ground: "#2b3047",
+      groundShadow: "#1b2036",
+      player: "#3cf56b",
+      playerShadow: "#1fb152",
+      spider: "#f55353",
+      spiderShadow: "#bf3737",
+      thread: "#e2e2e2",
+    };
+
+    const input = { left: false, right: false, restart: false };
+    const world = {
+      groundY: canvas.height - 60,
+      running: true,
+      gameOver: false,
+      startTime: performance.now(),
+      surviveTime: 0,
+      spawnEvery: 5,
+      spawnTimer: 0,
+    };
+
+    const player = {
+      w: 46,
+      h: 32,
+      x: canvas.width / 2 - 23,
+      y: 0,
+      speed: 320,
+    };
+    player.y = world.groundY - player.h;
+
+    function createSpider(x, dir) {
+      return {
+        x,
+        y: 42,
+        w: 32,
+        h: 26,
+        dir,
+        speedX: 140,
+        baseY: 42,
+        state: "patrol",
+        dropSpeed: 360,
+        dropTarget: world.groundY - 26,
+        cooldown: 0.5 + Math.random() * 1.5,
+      };
+    }
+
+    let spiders = [createSpider(120, 1), createSpider(canvas.width - 150, -1)];
+
+    const frameEl = document.querySelector(".frame");
+    const headerEl = document.querySelector(".header");
+    const footerEl = document.querySelector(".footer");
+    const gameWrap = document.querySelector(".game-wrap");
+    let pointerDown = false;
+
+    function resizeGameView() {
+      // Directly size the playfield to available viewport space (no transforms).
+      const baseW = canvas.width;
+      const baseH = canvas.height;
+      const viewportH = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+      const viewportW = (window.visualViewport && window.visualViewport.width) || window.innerWidth;
+      const headerH = headerEl.getBoundingClientRect().height;
+      const footerH = footerEl.getBoundingClientRect().height;
+      const frameStyle = getComputedStyle(frameEl);
+      const paddingY = parseFloat(frameStyle.paddingTop) + parseFloat(frameStyle.paddingBottom);
+      const paddingX = parseFloat(frameStyle.paddingLeft) + parseFloat(frameStyle.paddingRight);
+      const borderY = parseFloat(frameStyle.borderTopWidth) + parseFloat(frameStyle.borderBottomWidth);
+      const borderX = parseFloat(frameStyle.borderLeftWidth) + parseFloat(frameStyle.borderRightWidth);
+      const gutter = 12; // extra breathing room
+
+      const availableHeight = Math.max(
+        320,
+        viewportH - headerH - footerH - paddingY - borderY - gutter
+      );
+      const availableWidth = Math.max(
+        320,
+        Math.min(frameEl.clientWidth - paddingX, viewportW - paddingX) - gutter
+      );
+
+      let targetHeight = Math.min(baseH, availableHeight);
+      let targetWidth = targetHeight * (baseW / baseH);
+
+      if (targetWidth > availableWidth) {
+        targetWidth = availableWidth;
+        targetHeight = targetWidth * (baseH / baseW);
+      }
+
+      canvas.style.width = `${targetWidth}px`;
+      canvas.style.height = `${targetHeight}px`;
+      gameWrap.style.width = `${targetWidth}px`;
+      gameWrap.style.height = `${targetHeight}px`;
+    }
+
+    const keys = {
+      ArrowLeft: "left",
+      ArrowRight: "right",
+      a: "left",
+      d: "right",
+      A: "left",
+      D: "right",
+    };
+
+    window.addEventListener("keydown", (e) => {
+      if (keys[e.key]) input[keys[e.key]] = true;
+      if (e.key === "r" || e.key === "R") input.restart = true;
+    });
+    window.addEventListener("keyup", (e) => {
+      if (keys[e.key]) input[keys[e.key]] = false;
+    });
+
+    function setPointerMove(clientX) {
+      const isLeft = clientX < window.innerWidth * 0.5;
+      input.left = isLeft;
+      input.right = !isLeft;
+    }
+
+    function clearPointerMove() {
+      pointerDown = false;
+      input.left = false;
+      input.right = false;
+    }
+
+    gameWrap.addEventListener("pointerdown", (e) => {
+      pointerDown = true;
+      setPointerMove(e.clientX);
+      e.preventDefault();
+    });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!pointerDown) return;
+      setPointerMove(e.clientX);
+    });
+
+    window.addEventListener("pointerup", clearPointerMove);
+    window.addEventListener("pointercancel", clearPointerMove);
+    window.addEventListener("pointerleave", clearPointerMove);
+
+    function resetGame() {
+      world.gameOver = false;
+      world.startTime = performance.now();
+      world.spawnTimer = 0;
+      player.x = canvas.width / 2 - player.w / 2;
+      spiders = [createSpider(120, 1), createSpider(canvas.width - 150, -1)];
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function updateSpiders(dt) {
+      spiders.forEach((spider) => {
+        spider.x += spider.speedX * spider.dir * dt;
+        if (spider.x <= 8 || spider.x + spider.w >= canvas.width - 8) {
+          spider.dir *= -1;
+          spider.x = clamp(spider.x, 8, canvas.width - spider.w - 8);
+        }
+
+        if (spider.state === "patrol") {
+          spider.y = spider.baseY;
+          spider.cooldown -= dt;
+          if (spider.cooldown <= 0) {
+            spider.state = "dropping";
+            spider.dropTarget = world.groundY - spider.h;
+          }
+        } else if (spider.state === "dropping") {
+          spider.y += spider.dropSpeed * dt;
+          if (spider.y >= spider.dropTarget) {
+            spider.y = spider.dropTarget;
+            spider.state = "ascending";
+          }
+        } else if (spider.state === "ascending") {
+          spider.y -= spider.dropSpeed * dt;
+          if (spider.y <= spider.baseY) {
+            spider.y = spider.baseY;
+            spider.state = "patrol";
+            spider.cooldown = 0.8 + Math.random() * 1.6;
+          }
+        }
+      });
+    }
+
+    function drawBackground() {
+      ctx.fillStyle = "#0e1224";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // subtle stars
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      for (let i = 0; i < 80; i++) {
+        const sx = (i * 57) % canvas.width;
+        const sy = (i * 91 + 40) % (canvas.height / 2);
+        ctx.fillRect(sx, sy, 2, 2);
+      }
+      // ground blocks
+      ctx.fillStyle = palette.groundShadow;
+      ctx.fillRect(0, world.groundY, canvas.width, 60);
+      ctx.fillStyle = palette.ground;
+      for (let x = 0; x < canvas.width; x += 20) {
+        ctx.fillRect(x, world.groundY + 10, 16, 40);
+      }
+    }
+
+    function drawPlayer() {
+      const { x, y, w, h } = player;
+      ctx.fillStyle = palette.playerShadow;
+      ctx.fillRect(x + 3, y + 3, w, h);
+      ctx.fillStyle = palette.player;
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "#0b3f20";
+      ctx.fillRect(x + 10, y + 10, 8, 8); // left eye
+      ctx.fillRect(x + w - 18, y + 10, 8, 8); // right eye
+    }
+
+    function drawSpider(spider) {
+      const { x, y, w, h } = spider;
+      // thread
+      ctx.strokeStyle = palette.thread;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2, 0);
+      ctx.lineTo(x + w / 2, y);
+      ctx.stroke();
+      // body
+      ctx.fillStyle = palette.spiderShadow;
+      ctx.fillRect(x + 2, y + 2, w, h);
+      ctx.fillStyle = palette.spider;
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "#111";
+      ctx.fillRect(x + 8, y + 8, 6, 6);
+      ctx.fillRect(x + w - 14, y + 8, 6, 6);
+    }
+
+    function rectsOverlap(a, b) {
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+      );
+    }
+
+    let lastTime = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.03, (now - lastTime) / 1000);
+      lastTime = now;
+
+      if (!world.gameOver) {
+        world.surviveTime = (now - world.startTime) / 1000;
+        const move =
+          (input.right ? 1 : 0) * player.speed - (input.left ? 1 : 0) * player.speed;
+        player.x = clamp(player.x + move * dt, 8, canvas.width - player.w - 8);
+        updateSpiders(dt);
+        for (const spider of spiders) {
+          if (rectsOverlap(player, spider)) {
+            world.gameOver = true;
+            break;
+          }
+        }
+
+        world.spawnTimer += dt;
+        if (world.spawnTimer >= world.spawnEvery) {
+          world.spawnTimer -= world.spawnEvery;
+          const margin = 40;
+          const spawnX =
+            margin + Math.random() * (canvas.width - 32 - margin * 2);
+          const spawnDir = Math.random() < 0.5 ? -1 : 1;
+          spiders.push(createSpider(spawnX, spawnDir));
+        }
+      } else if (input.restart) {
+        resetGame();
+      }
+      input.restart = false;
+
+      drawBackground();
+      spiders.forEach(drawSpider);
+      drawPlayer();
+
+      hud.textContent = `Time: ${world.surviveTime.toFixed(1)}s`;
+
+      if (world.gameOver) {
+        ctx.fillStyle = "rgba(8, 10, 20, 0.75)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#f5d100";
+        ctx.textAlign = "center";
+        ctx.font = "20px 'Press Start 2P', 'VT323', 'Courier New', monospace";
+        ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 8);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "14px 'Press Start 2P', 'VT323', 'Courier New', monospace";
+        ctx.fillText("Press R to try again", canvas.width / 2, canvas.height / 2 + 24);
+      }
+
+      requestAnimationFrame(loop);
+    }
+    resizeGameView();
+    window.addEventListener("resize", resizeGameView);
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
