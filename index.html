@@ -4,22 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/png" href="assets/icon-768.png">
+  <link rel="icon" type="image/png" sizes="1024x1024" href="assets/icon-neon.png">
+  <link rel="shortcut icon" type="image/png" sizes="1024x1024" href="assets/icon-neon.png">
   <meta name="theme-color" content="#0c0f1a">
-  <title>8-Bit Spider Dodge</title>
+  <title>Hangtime</title>
   <style>
     :root {
       --bg-1: #0c0f1a;
       --bg-2: #1a1f33;
       --accent: #f5d100;
       --accent-2: #5af5f0;
-      --player: #3cf56b;
-      --player-shadow: #1fb152;
-      --spider: #f55353;
-      --spider-shadow: #bf3737;
-      --thread: #e2e2e2;
-      --ground: #2b3047;
-      --ground-shadow: #1b2036;
+      --paddle: #ff8c32;
+      --paddle-shadow: #c4651d;
+      --ball: #a855f7;
+      --ball-glow: rgba(168, 85, 247, 0.45);
+      --brick-1: #47f5bc;
+      --brick-2: #f5d147;
+      --brick-3: #5af5f0;
+      --grid-line: rgba(255, 255, 255, 0.08);
     }
     * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
     html, body {
@@ -33,8 +35,8 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: radial-gradient(circle at 30% 20%, #1c2240 0, #0b0d18 60%);
-      color: #e8ecff;
+      background: radial-gradient(circle at 40% 20%, #b8e4ff 0, #84c5f3 55%, #5fa8e4 90%);
+      color: #0b2a4d;
       font-family: "Press Start 2P", "VT323", "Courier New", monospace;
       letter-spacing: 0.5px;
       image-rendering: pixelated;
@@ -50,15 +52,27 @@
       padding: 12px;
     }
     .header {
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
       align-items: center;
       margin-bottom: 8px;
       font-size: 12px;
     }
+    #hud {
+      color: #ffffff;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+    }
+    .header-left {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
     .title {
       color: var(--accent);
       text-shadow: 2px 2px 0 #111;
+      text-align: center;
     }
     .game-wrap {
       width: 540px;
@@ -70,8 +84,8 @@
       height: 900px;
       background: repeating-linear-gradient(
         90deg,
-        rgba(255, 255, 255, 0.02),
-        rgba(255, 255, 255, 0.02) 8px,
+        var(--grid-line),
+        var(--grid-line) 8px,
         transparent 8px,
         transparent 16px
       );
@@ -85,72 +99,315 @@
       color: #cbd5ff;
     }
     .footer strong { color: var(--accent-2); }
+    /* Overlays */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 900;
+      pointer-events: none;
+    }
+    .overlay.visible { display: flex; }
+    .overlay-inner {
+      pointer-events: auto;
+      background: rgba(12, 15, 26, 0.92);
+      border: 2px solid #1f2740;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.55);
+      border-radius: 10px;
+      padding: 14px;
+      width: min(420px, 90vw);
+      color: #e8ecff;
+      text-align: center;
+      font-size: 12px;
+    }
+    .overlay h3 {
+      margin: 0 0 6px 0;
+      color: var(--accent);
+      font-size: 14px;
+    }
+    .overlay p { margin: 4px 0; }
+    .overlay .btn-row {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .overlay button {
+      background: #1d2542;
+      color: #e8ecff;
+      border: 1px solid #2f3656;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      min-width: 120px;
+    }
+    .overlay-love {
+      margin-top: 10px;
+      font-size: 10px;
+      color: #cbd5ff;
+    }
+    .overlay-love a {
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px dashed #5af5f0;
+    }
+    .start-btn {
+      font-size: 16px;
+      padding: 14px 20px;
+      width: 100%;
+      text-transform: uppercase;
+    }
+    .start-overlay-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .start-login-btn {
+      font-size: 12px;
+      padding: 10px 14px;
+    }
+    /* Avatar + dropdown */
+    .avatar-bubble {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 2px solid #0a0c14;
+      background: linear-gradient(135deg, #1d2542, #0f1326);
+      color: #f5d100;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+      transition: transform 0.1s ease;
+    }
+    .avatar-bubble:active { transform: translateY(1px); }
+    .avatar-dropdown {
+      position: absolute;
+      top: 38px;
+      left: 0;
+      min-width: 220px;
+      background: #0f1326;
+      border: 1px solid #1f2740;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.4);
+      border-radius: 8px;
+      padding: 10px;
+      display: none;
+      z-index: 1200;
+    }
+    .avatar-dropdown.open { display: block; }
+    .avatar-label {
+      color: #e8ecff;
+      font-size: 11px;
+      margin-bottom: 8px;
+      word-break: break-all;
+    }
+    .nostr-btn {
+      width: 100%;
+      background: #1d2542;
+      color: #e8ecff;
+      border: 1px solid #2f3656;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+    .nostr-btn:active { transform: translateY(1px); }
+    .nostr-input {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #2f3656;
+      background: #0c0f1a;
+      color: #e8ecff;
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+    /* Keys modal */
+    #keysModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      align-items: center;
+      justify-content: center;
+      z-index: 1300;
+      padding: 12px;
+    }
+    #keysModalInner {
+      width: min(92vw, 480px);
+      background: #0f1326;
+      border: 1px solid #1f2740;
+      color: #e8ecff;
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+    }
+    #keysModalNpub, #keysModalNsec {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 6px 8px;
+      border: 1px solid #2f3656;
+      border-radius: 6px;
+      background: #0c0f1a;
+      margin-bottom: 6px;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+    #keysModalToggle {
+      width: 38px;
+      height: 38px;
+      font-size: 16px;
+    }
+    #keysQrContainer { margin-top: 6px; display: flex; justify-content: center; }
   </style>
 </head>
 <body>
   <div class="frame">
     <div class="header">
-      <div class="title">8-BIT SPIDER DODGE</div>
-      <div id="hud">Time: 0.0s</div>
+      <div class="header-left">
+        <button id="nostrAvatarBubble" class="avatar-bubble" aria-label="Nostr identity">🟢</button>
+        <div id="nostrAvatarDropdown" class="avatar-dropdown">
+          <div id="nostrAvatarLabel" class="avatar-label">Session: loading…</div>
+          <button class="nostr-btn nostrLoginBtn">Login with Nostr (NIP-07)</button>
+          <button id="keysOpenBtn" class="nostr-btn">View keys</button>
+          <button id="keysCopyBtn" class="nostr-btn session-only">Copy session nsec</button>
+          <button id="keysQrBtn" class="nostr-btn session-only">Show session QR</button>
+          <input id="keysImportInput" class="nostr-input session-only" placeholder="Paste nsec to import">
+          <button id="keysImportBtn" class="nostr-btn session-only">Import nsec</button>
+          <button id="keysNewPlayerBtn" class="nostr-btn">New player</button>
+        </div>
+      </div>
+      <div class="title">HANGTIME</div>
+      <div id="hud">Score: 0</div>
     </div>
     <div class="game-wrap">
       <canvas id="game" width="540" height="900"></canvas>
+      <div id="startOverlay" class="overlay visible">
+        <div class="overlay-inner">
+          <h3>Hangtime</h3>
+          <p style="color:#cbd5ff;">Catch the updrafts, dodge the storm clouds, and stay aloft.</p>
+          <div class="start-overlay-actions">
+            <button id="startGameBtn" class="start-btn">Start Game</button>
+            <button class="start-login-btn nostrLoginBtn">Login with NIP-07</button>
+          </div>
+          <div class="overlay-love">
+            <a href="https://otherstuff.ai" target="_blank" rel="noreferrer">Vibed with Love. otherstuff.ai</a>
+          </div>
+        </div>
+      </div>
+      <div id="gameOverlay" class="overlay">
+        <div class="overlay-inner">
+          <h3>Game Over</h3>
+          <p id="overlayScore">Score: —</p>
+          <p style="color:#cbd5ff;">Distance flown: <span id="overlayDistance">0m</span></p>
+          <div class="btn-row">
+            <button id="overlayRestartBtn">Start Game</button>
+            <button id="overlayPostBtn">Post score to Nostr</button>
+          </div>
+          <div id="overlayStatus" style="margin-top:6px; color:#a7b7ff;"></div>
+          <div class="overlay-love">
+            <a href="https://otherstuff.ai" target="_blank" rel="noreferrer">Vibed with Love. otherstuff.ai</a>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="footer">
-      Move with <strong>A/D</strong> or <strong>←/→</strong>. Avoid the spiders. Press <strong>R</strong> to restart.
+      Steer the glider with <strong>A/D</strong> or <strong>←/→</strong>. Collect energy orbs, avoid hazards. Press <strong>R</strong> to restart.
     </div>
   </div>
+  <div id="keysModal">
+    <div id="keysModalInner">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div style="font-weight:700; font-size:14px;">Session Keys</div>
+        <button id="keysModalClose" class="nostr-btn" style="width:auto; padding:6px 10px; margin:0;">Close</button>
+      </div>
+      <div id="keysModalNpub"></div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div id="keysModalNsec" style="flex:1;"></div>
+        <button id="keysModalToggle" class="nostr-btn" aria-label="Reveal private key">👁</button>
+      </div>
+      <div id="keysModalNote" style="font-size:11px; color:#cbd5ff; margin-top:6px;"></div>
+      <div id="keysQrContainer"></div>
+    </div>
+  </div>
+  <script src="js/nostr-session.js"></script>
+  <script src="js/nostr-signers.js"></script>
+  <script src="js/nostr-post.js"></script>
+  <script src="js/nostr-ui.js"></script>
   <script>
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
     const hud = document.getElementById("hud");
     const palette = {
-      ground: "#2b3047",
-      groundShadow: "#1b2036",
-      player: "#3cf56b",
-      playerShadow: "#1fb152",
-      spider: "#f55353",
-      spiderShadow: "#bf3737",
-      thread: "#e2e2e2",
+      skyTop: "#d4f0ff",
+      skyBottom: "#8fc7ff",
+      trail: "rgba(90,245,240,0.08)",
+      ridge: "rgba(12, 20, 46, 0.9)",
+      ridgeGlow: "rgba(26, 48, 84, 0.45)",
+      glider: "#f5d147",
+      gliderTrim: "#ff8c32",
+      pilot: "#1c203b",
+      cowBody: "#f7fbff",
+      cowSpot: "#232644",
+      cowWing: "#5af5f0",
+      cowHorn: "#f5d147",
+      cowEye: "#0a0d1c",
+      powerEnergy: "#52f58a",
+      powerWind: "#5af5f0",
+      powerShield: "#ffd25a",
+      powerLaser: "#ff6af0",
+      laserBeam: "rgba(255, 106, 240, 0.55)",
     };
 
     const input = { left: false, right: false, restart: false };
+    const rand = (min, max) => Math.random() * (max - min) + min;
     const world = {
-      groundY: canvas.height - 60,
-      running: true,
+      started: false,
       gameOver: false,
-      startTime: performance.now(),
-      surviveTime: 0,
-      spawnEvery: 5,
-      spawnTimer: 0,
+      postedScore: false,
+      score: 0,
+      distance: 0,
+      lives: 3,
+      maxLives: 5,
+      elapsedTime: 0,
+      baseScrollSpeed: 180,
+      scrollSpeed: 180,
+      scrollOffset: 0,
+      nextObstacle: 1.4,
+      nextPowerUp: 4,
     };
 
     const player = {
-      w: 46,
-      h: 32,
-      x: canvas.width / 2 - 23,
-      y: 0,
+      x: canvas.width / 2,
+      y: canvas.height * 0.78,
+      w: 90,
+      h: 26,
+      vx: 0,
       speed: 320,
+      tilt: 0,
+      invuln: 0,
+      boostTimer: 0,
+      laserTimer: 0,
+      shieldTimer: 0,
     };
-    player.y = world.groundY - player.h;
 
-    function createSpider(x, dir) {
-      return {
-        x,
-        y: 42,
-        w: 32,
-        h: 26,
-        dir,
-        speedX: 140,
-        baseY: 42,
-        state: "patrol",
-        dropSpeed: 360,
-        dropTarget: world.groundY - 26,
-        cooldown: 0.5 + Math.random() * 1.5,
-      };
-    }
+    const obstacles = [];
+    const powerUps = [];
 
-    let spiders = [createSpider(120, 1), createSpider(canvas.width - 150, -1)];
+    const startOverlay = document.getElementById("startOverlay");
+    const startGameBtn = document.getElementById("startGameBtn");
+    const overlay = document.getElementById("gameOverlay");
+    const overlayScore = document.getElementById("overlayScore");
+    const overlayDistance = document.getElementById("overlayDistance");
+    const overlayRestartBtn = document.getElementById("overlayRestartBtn");
+    const overlayPostBtn = document.getElementById("overlayPostBtn");
+    const overlayStatus = document.getElementById("overlayStatus");
 
     const frameEl = document.querySelector(".frame");
     const headerEl = document.querySelector(".header");
@@ -159,7 +416,6 @@
     let pointerDown = false;
 
     function resizeGameView() {
-      // Directly size the playfield to available viewport space (no transforms).
       const baseW = canvas.width;
       const baseH = canvas.height;
       const viewportH = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
@@ -171,7 +427,7 @@
       const paddingX = parseFloat(frameStyle.paddingLeft) + parseFloat(frameStyle.paddingRight);
       const borderY = parseFloat(frameStyle.borderTopWidth) + parseFloat(frameStyle.borderBottomWidth);
       const borderX = parseFloat(frameStyle.borderLeftWidth) + parseFloat(frameStyle.borderRightWidth);
-      const gutter = 12; // extra breathing room
+      const gutter = 12;
 
       const availableHeight = Math.max(
         320,
@@ -240,106 +496,449 @@
     window.addEventListener("pointercancel", clearPointerMove);
     window.addEventListener("pointerleave", clearPointerMove);
 
+    function setupWorldState() {
+      world.postedScore = false;
+      world.score = 0;
+      world.distance = 0;
+      world.lives = 3;
+      world.gameOver = false;
+      world.elapsedTime = 0;
+      world.scrollSpeed = world.baseScrollSpeed;
+      world.scrollOffset = 0;
+      world.nextObstacle = 0.8;
+      world.nextPowerUp = 4;
+      player.x = canvas.width / 2;
+      player.y = canvas.height * 0.78;
+      player.vx = 0;
+      player.tilt = 0;
+      player.invuln = 0;
+      player.boostTimer = 0;
+      player.laserTimer = 0;
+      player.shieldTimer = 0;
+      obstacles.length = 0;
+      powerUps.length = 0;
+      if (overlayStatus) overlayStatus.textContent = "";
+    }
+
+    function hideStartOverlay() {
+      if (startOverlay) startOverlay.classList.remove("visible");
+    }
+
+    function startGame() {
+      if (world.started) return;
+      hideStartOverlay();
+      resetGame();
+    }
+
     function resetGame() {
       world.gameOver = false;
-      world.startTime = performance.now();
-      world.spawnTimer = 0;
-      player.x = canvas.width / 2 - player.w / 2;
-      spiders = [createSpider(120, 1), createSpider(canvas.width - 150, -1)];
+      world.started = true;
+      setupWorldState();
+      if (overlay) overlay.style.display = "none";
     }
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
     }
 
-    function updateSpiders(dt) {
-      spiders.forEach((spider) => {
-        spider.x += spider.speedX * spider.dir * dt;
-        if (spider.x <= 8 || spider.x + spider.w >= canvas.width - 8) {
-          spider.dir *= -1;
-          spider.x = clamp(spider.x, 8, canvas.width - spider.w - 8);
-        }
+    const lerp = (from, to, t) => from + (to - from) * clamp(t, 0, 1);
 
-        if (spider.state === "patrol") {
-          spider.y = spider.baseY;
-          spider.cooldown -= dt;
-          if (spider.cooldown <= 0) {
-            spider.state = "dropping";
-            spider.dropTarget = world.groundY - spider.h;
-          }
-        } else if (spider.state === "dropping") {
-          spider.y += spider.dropSpeed * dt;
-          if (spider.y >= spider.dropTarget) {
-            spider.y = spider.dropTarget;
-            spider.state = "ascending";
-          }
-        } else if (spider.state === "ascending") {
-          spider.y -= spider.dropSpeed * dt;
-          if (spider.y <= spider.baseY) {
-            spider.y = spider.baseY;
-            spider.state = "patrol";
-            spider.cooldown = 0.8 + Math.random() * 1.6;
-          }
-        }
-      });
+    function drawRoundedRect(x, y, w, h, r) {
+      const radius = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + w - radius, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+      ctx.lineTo(x + w, y + h - radius);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      ctx.lineTo(x + radius, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function circleRectCollision(circle, rect) {
+      const closestX = clamp(circle.x, rect.x, rect.x + rect.w);
+      const closestY = clamp(circle.y, rect.y, rect.y + rect.h);
+      const dx = circle.x - closestX;
+      const dy = circle.y - closestY;
+      return dx * dx + dy * dy <= circle.radius * circle.radius;
     }
 
     function drawBackground() {
-      ctx.fillStyle = "#0e1224";
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, palette.skyTop);
+      gradient.addColorStop(1, palette.skyBottom);
+      ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      // subtle stars
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      for (let i = 0; i < 80; i++) {
-        const sx = (i * 57) % canvas.width;
-        const sy = (i * 91 + 40) % (canvas.height / 2);
-        ctx.fillRect(sx, sy, 2, 2);
+
+      const band = 70;
+      const offset = world.scrollOffset % band;
+      ctx.strokeStyle = palette.trail;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let y = -offset; y < canvas.height; y += band) {
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
       }
-      // ground blocks
-      ctx.fillStyle = palette.groundShadow;
-      ctx.fillRect(0, world.groundY, canvas.width, 60);
-      ctx.fillStyle = palette.ground;
-      for (let x = 0; x < canvas.width; x += 20) {
-        ctx.fillRect(x, world.groundY + 10, 16, 40);
+      ctx.stroke();
+
+      ctx.fillStyle = palette.ridgeGlow;
+      ctx.fillRect(0, canvas.height - 110, canvas.width, 110);
+
+      ctx.fillStyle = palette.ridge;
+      for (let i = 0; i < 3; i++) {
+        const height = 70 + i * 20;
+        const baseY = canvas.height - height;
+        const phase = (world.scrollOffset * (0.12 + i * 0.02) + i * 90) % (canvas.width * 2);
+        ctx.beginPath();
+        ctx.moveTo(-canvas.width + phase, canvas.height);
+        ctx.lineTo(phase - canvas.width * 0.5, baseY);
+        ctx.lineTo(phase + canvas.width * 0.2, canvas.height);
+        ctx.closePath();
+        ctx.fill();
       }
+    }
+
+    function drawPowerUps() {
+      powerUps.forEach((p) => {
+        ctx.save();
+        ctx.translate(p.x + p.size / 2, p.y + p.size / 2);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(12, 15, 26, 0.35)";
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.restore();
+      });
+    }
+
+    function drawObstacles() {
+      obstacles.forEach(drawCow);
+    }
+
+    function drawLaserBeam() {
+      if (player.laserTimer <= 0) return;
+      const beamWidth = 32;
+      const beamLeft = player.x - beamWidth / 2;
+      const beamHeight = Math.max(40, player.y - player.h * 0.4);
+      const alpha = clamp(player.laserTimer / 2, 0, 1);
+      const gradient = ctx.createLinearGradient(player.x, 0, player.x, beamHeight);
+      gradient.addColorStop(0, "rgba(255,255,255,0)");
+      gradient.addColorStop(0.2, `rgba(255,255,255,${0.25 * alpha})`);
+      const beamColor = `rgba(255,106,240,${0.35 + alpha * 0.35})`;
+      gradient.addColorStop(1, beamColor);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = gradient;
+      ctx.fillRect(beamLeft, 0, beamWidth, beamHeight);
+      ctx.restore();
+    }
+
+    function drawCow(obs) {
+      ctx.save();
+      const centerX = obs.x + obs.w / 2;
+      const centerY = obs.y + obs.h / 2;
+      const bob = Math.sin(world.scrollOffset * 0.03 + obs.phase) * 4;
+      ctx.translate(centerX, centerY + bob);
+
+      const bodyW = obs.w * 0.75;
+      const bodyH = obs.h * 0.55;
+      ctx.fillStyle = palette.cowBody;
+      drawRoundedRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 20);
+
+      ctx.fillStyle = palette.cowSpot;
+      obs.spots.forEach((spot) => {
+        ctx.beginPath();
+        ctx.ellipse(spot.x * bodyW * 0.5, spot.y * bodyH * 0.5, spot.size * bodyW, spot.size * bodyH, spot.rot, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // head
+      const headW = bodyW * 0.45;
+      const headH = bodyH * 0.7;
+      ctx.fillStyle = palette.cowBody;
+      drawRoundedRect(bodyW / 2 - headW * 0.3, -headH / 2, headW, headH, 14);
+
+      // muzzle
+      ctx.fillStyle = "#f5d8c8";
+      drawRoundedRect(bodyW / 2, -headH * 0.25, headW * 0.5, headH * 0.5, 10);
+
+      // horns
+      ctx.fillStyle = palette.cowHorn;
+      ctx.fillRect(bodyW / 2 + headW * 0.4, -headH * 0.5, 6, 14);
+      ctx.fillRect(bodyW / 2 + headW * 0.25, -headH * 0.5, 6, 14);
+
+      // eyes
+      ctx.fillStyle = palette.cowEye;
+      ctx.beginPath();
+      ctx.arc(bodyW / 2 + headW * 0.15, -headH * 0.05, 4, 0, Math.PI * 2);
+      ctx.arc(bodyW / 2 + headW * 0.32, -headH * 0.05, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // legs
+      ctx.fillStyle = palette.cowBody;
+      for (let i = -1; i <= 1; i += 2) {
+        ctx.fillRect(i * bodyW * 0.2 - 3, bodyH / 2 - 4, 6, 18);
+      }
+      ctx.restore();
     }
 
     function drawPlayer() {
-      const { x, y, w, h } = player;
-      ctx.fillStyle = palette.playerShadow;
-      ctx.fillRect(x + 3, y + 3, w, h);
-      ctx.fillStyle = palette.player;
-      ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = "#0b3f20";
-      ctx.fillRect(x + 10, y + 10, 8, 8); // left eye
-      ctx.fillRect(x + w - 18, y + 10, 8, 8); // right eye
-    }
-
-    function drawSpider(spider) {
-      const { x, y, w, h } = spider;
-      // thread
-      ctx.strokeStyle = palette.thread;
-      ctx.lineWidth = 2;
+      ctx.save();
+      ctx.translate(player.x, player.y);
+      ctx.rotate(player.tilt);
+      const glowAlpha = player.invuln > 0 ? 0.6 : 0.3;
+      ctx.fillStyle = `rgba(90,245,240,${glowAlpha})`;
       ctx.beginPath();
-      ctx.moveTo(x + w / 2, 0);
-      ctx.lineTo(x + w / 2, y);
+      ctx.ellipse(0, 10, player.w * 0.6, player.h, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = palette.glider;
+      ctx.beginPath();
+      ctx.moveTo(-player.w * 0.6, 0);
+      ctx.lineTo(player.w * 0.6, 0);
+      ctx.lineTo(0, player.h);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = palette.gliderTrim;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-player.w * 0.55, 0);
+      ctx.lineTo(0, player.h - 4);
+      ctx.lineTo(player.w * 0.55, 0);
       ctx.stroke();
-      // body
-      ctx.fillStyle = palette.spiderShadow;
-      ctx.fillRect(x + 2, y + 2, w, h);
-      ctx.fillStyle = palette.spider;
-      ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = "#111";
-      ctx.fillRect(x + 8, y + 8, 6, 6);
-      ctx.fillRect(x + w - 14, y + 8, 6, 6);
+
+      ctx.fillStyle = palette.pilot;
+      ctx.beginPath();
+      ctx.arc(0, player.h * 0.2, player.h * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(-6, player.h * 0.2, 12, player.h * 0.7);
+
+      if (player.laserTimer > 0) {
+        ctx.fillStyle = palette.powerLaser;
+        ctx.beginPath();
+        ctx.arc(-3, player.h * 0.1, 3, 0, Math.PI * 2);
+        ctx.arc(3, player.h * 0.1, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (player.shieldTimer > 0) {
+      ctx.strokeStyle = palette.powerShield;
+        ctx.lineWidth = 3;
+        ctx.globalAlpha = 0.6;
+        ctx.beginPath();
+        ctx.ellipse(0, player.h * 0.1, player.w * 0.55, player.h * 1.1, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
     }
 
-    function rectsOverlap(a, b) {
-      return (
-        a.x < b.x + b.w &&
-        a.x + a.w > b.x &&
-        a.y < b.y + b.h &&
-        a.y + a.h > b.y
-      );
+    function spawnObstacle() {
+      const w = rand(65, 120);
+      const h = rand(50, 80);
+      const x = rand(30, canvas.width - w - 30);
+      const spots = Array.from({ length: 3 }, () => ({
+        x: rand(-0.4, 0.4),
+        y: rand(-0.3, 0.3),
+        size: rand(0.08, 0.18),
+        rot: rand(0, Math.PI),
+      }));
+      obstacles.push({
+        x,
+        y: -h,
+        w,
+        h,
+        speed: world.scrollSpeed + rand(-20, 40),
+        phase: Math.random() * Math.PI * 2,
+        spots,
+      });
+    }
+
+    function spawnPowerUp() {
+      const roll = Math.random();
+      let type;
+      if (roll < 0.35) type = "energy";
+      else if (roll < 0.6) type = "wind";
+      else if (roll < 0.8) type = "shield";
+      else type = "laser";
+      const size = 30;
+      const colors = {
+        energy: palette.powerEnergy,
+        wind: palette.powerWind,
+        shield: palette.powerShield,
+        laser: palette.powerLaser,
+      };
+      powerUps.push({
+        type,
+        x: rand(40, canvas.width - size - 40),
+        y: -size,
+        size,
+        speed: world.scrollSpeed * 0.8,
+        color: colors[type] || palette.powerEnergy,
+      });
+    }
+
+    function applyPowerUp(power) {
+      switch (power.type) {
+        case "energy":
+          world.lives = clamp(world.lives + 1, 0, world.maxLives);
+          world.score += 150;
+          notify("Energy orb collected!");
+          break;
+        case "wind":
+          player.boostTimer = Math.max(player.boostTimer, 3);
+          world.score += 75;
+          notify("Caught a tailwind!");
+          break;
+        case "shield":
+          player.shieldTimer = Math.max(player.shieldTimer, 2);
+          player.invuln = Math.max(player.invuln, player.shieldTimer);
+          world.score += 60;
+          notify("Shield bubble up!");
+          break;
+        case "laser":
+        default:
+          player.laserTimer = Math.max(player.laserTimer, 2);
+          world.score += 90;
+          notify("Laser eyes charged!");
+          break;
+      }
+    }
+
+    function handlePlayerHit() {
+      if (player.shieldTimer > 0) {
+        notify("Shield absorbed the hit!");
+        return;
+      }
+      if (player.invuln > 0) return;
+      world.lives -= 1;
+      world.score = Math.max(0, Math.floor(world.score - 120));
+      player.invuln = 1.5;
+      notify("Glider clipped!");
+      if (world.lives <= 0) {
+        world.lives = 0;
+        world.gameOver = true;
+        showGameOver();
+      }
+    }
+
+    function updatePlayer(dt) {
+      const steer = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      const boost = player.boostTimer > 0 ? 1.3 : 1;
+      player.vx = lerp(player.vx, steer * player.speed * boost, 0.15);
+      player.x = clamp(player.x + player.vx * dt, 40, canvas.width - 40);
+      player.tilt = lerp(player.tilt, steer * 0.4, 0.08);
+      if (player.invuln > 0) {
+        player.invuln = Math.max(0, player.invuln - dt);
+      }
+      if (player.boostTimer > 0) {
+        player.boostTimer = Math.max(0, player.boostTimer - dt);
+      }
+      if (player.laserTimer > 0) {
+        player.laserTimer = Math.max(0, player.laserTimer - dt);
+      }
+      if (player.shieldTimer > 0) {
+        player.shieldTimer = Math.max(0, player.shieldTimer - dt);
+        player.invuln = Math.max(player.invuln, player.shieldTimer);
+      }
+    }
+
+    function updateObstacles(dt) {
+      const hitCircle = { x: player.x, y: player.y + 6, radius: player.w * 0.35 };
+      const laserActive = player.laserTimer > 0;
+      const beamHalf = 18;
+      const beamLeft = player.x - beamHalf;
+      const beamRight = player.x + beamHalf;
+      const beamBottom = player.y - player.h * 0.3;
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.y += (world.scrollSpeed + obs.speed * 0.25) * dt;
+        if (obs.y > canvas.height + obs.h) {
+          obstacles.splice(i, 1);
+          continue;
+        }
+        if (laserActive && obs.y < beamBottom && obs.y + obs.h > 0) {
+          const overlapsBeam = obs.x < beamRight && obs.x + obs.w > beamLeft;
+          if (overlapsBeam) {
+            obstacles.splice(i, 1);
+            world.score += 90;
+            continue;
+          }
+        }
+        if (circleRectCollision(hitCircle, obs)) {
+          obstacles.splice(i, 1);
+          handlePlayerHit();
+        }
+      }
+    }
+
+    function updatePowerUps(dt) {
+      const hitCircle = { x: player.x, y: player.y + 6, radius: player.w * 0.35 };
+      for (let i = powerUps.length - 1; i >= 0; i--) {
+        const power = powerUps[i];
+        power.y += (world.scrollSpeed + power.speed) * dt * 0.5;
+        if (power.y > canvas.height + power.size) {
+          powerUps.splice(i, 1);
+          continue;
+        }
+        const rect = { x: power.x, y: power.y, w: power.size, h: power.size };
+        if (circleRectCollision(hitCircle, rect)) {
+          applyPowerUp(power);
+          powerUps.splice(i, 1);
+        }
+      }
+    }
+
+    const notify = (msg) => {
+      try {
+        if (window.NostrUI && typeof window.NostrUI.showToast === "function") {
+          window.NostrUI.showToast(msg);
+          return;
+        }
+      } catch (_) {}
+      console.log("[toast]", msg);
+    };
+
+    function showGameOver() {
+      if (!overlay) return;
+      overlayScore.textContent = `Score: ${Math.floor(world.score)}`;
+      overlayDistance.textContent = `${Math.floor(world.distance)}m`;
+      overlayStatus.textContent = "";
+      overlay.style.display = "flex";
+    }
+
+    async function postScoreToNostr() {
+      if (!window.NostrPost || !window.NostrSigners) {
+        notify("Nostr not ready");
+        return;
+      }
+      const preview = window.NostrPost?.formatScoreContent
+        ? window.NostrPost.formatScoreContent({
+            score: Math.floor(world.score),
+            baseUrl: window.location.origin,
+          })
+        : `I glided ${Math.floor(world.distance)}m in Hangtime!\nScore: ${Math.floor(
+            world.score
+          )}\n\nAt ${window.location.origin}`;
+      if (!confirm(`Post this to Nostr?\n\n${preview}`)) return;
+      try {
+        const res = await window.NostrPost.publishScore({
+          score: Math.floor(world.score),
+          baseUrl: window.location.origin,
+        });
+        overlayStatus.textContent = `Posted via ${res.signerMode || "nostr"}`;
+        notify("Score posted");
+      } catch (e) {
+        console.warn("Score publish failed", e);
+        overlayStatus.textContent = "";
+      }
     }
 
     let lastTime = performance.now();
@@ -347,38 +946,50 @@
       const dt = Math.min(0.03, (now - lastTime) / 1000);
       lastTime = now;
 
-      if (!world.gameOver) {
-        world.surviveTime = (now - world.startTime) / 1000;
-        const move =
-          (input.right ? 1 : 0) * player.speed - (input.left ? 1 : 0) * player.speed;
-        player.x = clamp(player.x + move * dt, 8, canvas.width - player.w - 8);
-        updateSpiders(dt);
-        for (const spider of spiders) {
-          if (rectsOverlap(player, spider)) {
-            world.gameOver = true;
-            break;
-          }
+      if (world.started && !world.gameOver) {
+        world.elapsedTime += dt;
+        world.scrollSpeed = clamp(
+          world.baseScrollSpeed + world.distance * 0.08 + (player.boostTimer > 0 ? 40 : 0),
+          world.baseScrollSpeed,
+          420
+        );
+        world.scrollOffset = (world.scrollOffset + world.scrollSpeed * dt) % 500;
+        world.distance += world.scrollSpeed * dt * 0.3;
+        world.score += world.scrollSpeed * dt * 0.25;
+
+        world.nextObstacle -= dt;
+        if (world.nextObstacle <= 0) {
+          spawnObstacle();
+          const spacing = clamp(2.2 - world.distance * 0.0015, 0.8, 1.8);
+          world.nextObstacle = rand(spacing * 0.9, spacing * 1.3);
         }
 
-        world.spawnTimer += dt;
-        if (world.spawnTimer >= world.spawnEvery) {
-          world.spawnTimer -= world.spawnEvery;
-          const margin = 40;
-          const spawnX =
-            margin + Math.random() * (canvas.width - 32 - margin * 2);
-          const spawnDir = Math.random() < 0.5 ? -1 : 1;
-          spiders.push(createSpider(spawnX, spawnDir));
+        world.nextPowerUp -= dt;
+        if (world.nextPowerUp <= 0) {
+          spawnPowerUp();
+          world.nextPowerUp = rand(5, 8);
         }
-      } else if (input.restart) {
+
+        updatePlayer(dt);
+        updateObstacles(dt);
+        updatePowerUps(dt);
+      } else if (world.gameOver && input.restart) {
         resetGame();
+      } else if (!world.started && input.restart) {
+        startGame();
       }
       input.restart = false;
 
       drawBackground();
-      spiders.forEach(drawSpider);
+      drawObstacles();
+      drawLaserBeam();
+      drawPowerUps();
       drawPlayer();
 
-      hud.textContent = `Time: ${world.surviveTime.toFixed(1)}s`;
+      const points = Math.floor(world.score);
+      const distance = Math.floor(world.distance);
+      const speed = Math.floor(world.scrollSpeed);
+      hud.textContent = `Points: ${points} | Speed: ${speed} | Lives: ${world.lives} | Distance: ${distance}m`;
 
       if (world.gameOver) {
         ctx.fillStyle = "rgba(8, 10, 20, 0.75)";
@@ -386,17 +997,33 @@
         ctx.fillStyle = "#f5d100";
         ctx.textAlign = "center";
         ctx.font = "20px 'Press Start 2P', 'VT323', 'Courier New', monospace";
-        ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 8);
+        ctx.fillText("STORM DOWN", canvas.width / 2, canvas.height / 2 - 8);
         ctx.fillStyle = "#ffffff";
         ctx.font = "14px 'Press Start 2P', 'VT323', 'Courier New', monospace";
-        ctx.fillText("Press R to try again", canvas.width / 2, canvas.height / 2 + 24);
+        ctx.fillText("Press R to soar again", canvas.width / 2, canvas.height / 2 + 24);
+        showGameOver();
       }
 
       requestAnimationFrame(loop);
     }
+    setupWorldState();
     resizeGameView();
     window.addEventListener("resize", resizeGameView);
+    if (overlayRestartBtn) {
+      overlayRestartBtn.addEventListener("click", resetGame);
+    }
+    if (overlayPostBtn) {
+      overlayPostBtn.addEventListener("click", postScoreToNostr);
+    }
+    if (startGameBtn) {
+      startGameBtn.addEventListener("click", startGame);
+    }
     requestAnimationFrame(loop);
   </script>
+  <script
+    src="https://unpkg.com/nanalytics-tracker@0.1.2/dist/index.global.js"
+    data-site-uuid="5fb2876e-61f5-456c-9010-76283bc8d797"
+    data-cvm-pubkey="d8a066f85d621d634e24ee0bf741e27b6436af28782195de8aa90972e310e937"
+  ></script>
 </body>
 </html>
