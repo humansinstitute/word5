@@ -1,14 +1,14 @@
 {
-  "name": "8-Bit Spider Dodge",
-  "short_name": "Spiders",
+  "name": "WORD5",
+  "short_name": "WORD5",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#0c0f1a",
-  "theme_color": "#0c0f1a",
+  "background_color": "#121213",
+  "theme_color": "#121213",
   "icons": [
     {
-      "src": "assets/icon-neon.png",
-      "sizes": "1024x1024",
+      "src": "assets/icon-word5.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     }
