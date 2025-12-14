@@ -234,21 +234,25 @@
       gap: 6px;
       width: 100%;
       max-width: 484px;
+      padding: 0 4px;
+      box-sizing: border-box;
     }
     .keyboard-row {
       display: flex;
       justify-content: center;
-      gap: 6px;
+      gap: clamp(4px, 1vw, 6px);
     }
     .key {
-      height: 58px;
-      min-width: 40px;
-      padding: 0 12px;
+      flex: 1;
+      height: clamp(48px, 10vw, 58px);
+      min-width: 0;
+      max-width: 44px;
+      padding: 0 2px;
       border: none;
       border-radius: 4px;
       background: var(--key-bg);
       color: var(--key-text);
-      font-size: 14px;
+      font-size: clamp(11px, 3vw, 14px);
       font-weight: 700;
       text-transform: uppercase;
       cursor: pointer;
@@ -261,8 +265,9 @@
       transform: scale(0.95);
     }
     .key.wide {
-      min-width: 65px;
-      font-size: 12px;
+      flex: 1.5;
+      max-width: 65px;
+      font-size: clamp(10px, 2.5vw, 12px);
     }
     .key.correct {
       background: var(--correct);
