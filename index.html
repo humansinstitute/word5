@@ -1009,14 +1009,19 @@
           const signed = await signer.signEvent(unsigned);
           const pub = pool.publish(relays, signed);
 
+          let succeeded = false;
           await new Promise((resolve) => {
-            let done = 0;
-            pub.on('ok', () => { done++; if (done >= 1) resolve(); });
-            pub.on('failed', () => { done++; if (done >= relays.length) resolve(); });
-            setTimeout(resolve, 3000);
+            let responded = 0;
+            pub.on('ok', () => { succeeded = true; responded++; resolve(); });
+            pub.on('failed', () => { responded++; if (responded >= relays.length) resolve(); });
+            setTimeout(resolve, 5000);
           });
 
           try { pool.close(relays); } catch (_) {}
+
+          if (!succeeded) {
+            throw new Error('No relay confirmed the post (timeout or all failed)');
+          }
 
           postStatus.textContent = `Posted via ${signer.mode}`;
           showToast('Posted to Nostr!');
