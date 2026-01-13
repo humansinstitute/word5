@@ -157,6 +157,30 @@
     .timer {
       font-size: 14px;
       color: #818384;
+      text-align: center;
+      padding: 8px 0;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .nav-link {
+      color: #818384;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 6px;
+      transition: background 0.2s, color 0.2s;
+      cursor: pointer;
+    }
+    .nav-link:hover {
+      color: #ffffff;
+      background: rgba(147, 51, 234, 0.1);
+    }
+    .nav-link.active {
+      color: #9333ea;
     }
     .game-container {
       display: flex;
@@ -416,11 +440,15 @@
       </div>
     </div>
     <div class="title">WORD5</div>
-    <div class="timer" id="timer">Next word in: --:--:--</div>
+    <div class="header-right">
+      <span class="nav-link active">Play</span>
+      <a href="social.html" class="nav-link">Social</a>
+    </div>
   </div>
 
   <div class="game-container">
     <div class="board" id="board"></div>
+    <div class="timer" id="timer">Next word in: --:--:--</div>
     <div class="keyboard" id="keyboard"></div>
   </div>
 
@@ -1001,7 +1029,12 @@
               ['t', 'wordle'],
               ['game', 'word5'],
               ['puzzle', String(periodNum)],
-              ['result', state.won ? String(state.guesses.length) : 'X']
+              ['result', state.won ? String(state.guesses.length) : 'X'],
+              // Streak and stats for leaderboards
+              ['streak', String(state.stats.streak)],
+              ['maxStreak', String(state.stats.maxStreak)],
+              ['played', String(state.stats.played)],
+              ['won', String(state.stats.won)]
             ],
             content
           };
@@ -1009,14 +1042,19 @@
           const signed = await signer.signEvent(unsigned);
           const pub = pool.publish(relays, signed);
 
+          let succeeded = false;
           await new Promise((resolve) => {
-            let done = 0;
-            pub.on('ok', () => { done++; if (done >= 1) resolve(); });
-            pub.on('failed', () => { done++; if (done >= relays.length) resolve(); });
-            setTimeout(resolve, 3000);
+            let responded = 0;
+            pub.on('ok', () => { succeeded = true; responded++; resolve(); });
+            pub.on('failed', () => { responded++; if (responded >= relays.length) resolve(); });
+            setTimeout(resolve, 5000);
           });
 
           try { pool.close(relays); } catch (_) {}
+
+          if (!succeeded) {
+            throw new Error('No relay confirmed the post (timeout or all failed)');
+          }
 
           postStatus.textContent = `Posted via ${signer.mode}`;
           showToast('Posted to Nostr!');
