@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/icon-word5.png">
+  <link rel="shortcut icon" type="image/png" sizes="512x512" href="assets/icon-word5.png">
+  <link rel="apple-touch-icon" href="assets/icon-word5.png">
+  <meta name="theme-color" content="#121213">
+  <title>WORD5 Social</title>
+  <style>
+    /* Nostr UI styles */
+    .header-left {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .avatar-bubble {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid #3a3a3c;
+      background: #1a1a1b;
+      color: #9333ea;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+      transition: transform 0.1s ease;
+    }
+    .avatar-bubble:active { transform: translateY(1px); }
+    .avatar-dropdown {
+      position: absolute;
+      top: 44px;
+      left: 0;
+      min-width: 240px;
+      background: #1a1a1b;
+      border: 1px solid #3a3a3c;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.5);
+      border-radius: 8px;
+      padding: 12px;
+      display: none;
+      z-index: 1200;
+    }
+    .avatar-dropdown.open { display: block; }
+    .avatar-label {
+      color: #ffffff;
+      font-size: 12px;
+      margin-bottom: 10px;
+      word-break: break-all;
+    }
+    .nostr-btn {
+      width: 100%;
+      background: #2a2a2b;
+      color: #ffffff;
+      border: 1px solid #3a3a3c;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 12px;
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+    .nostr-btn:hover { background: #3a3a3b; }
+    .nostr-btn:active { transform: translateY(1px); }
+    .nostr-input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid #3a3a3c;
+      background: #121213;
+      color: #ffffff;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    #keysModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      align-items: center;
+      justify-content: center;
+      z-index: 1300;
+      padding: 12px;
+    }
+    #keysModalInner {
+      width: min(92vw, 420px);
+      background: #1a1a1b;
+      border: 1px solid #3a3a3c;
+      color: #ffffff;
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    }
+    #keysModalNpub, #keysModalNsec {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      padding: 8px 10px;
+      border: 1px solid #3a3a3c;
+      border-radius: 6px;
+      background: #121213;
+      margin-bottom: 8px;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+    #keysModalToggle {
+      width: 40px;
+      height: 40px;
+      font-size: 16px;
+    }
+    #keysQrContainer { margin-top: 8px; display: flex; justify-content: center; }
+    :root {
+      --bg: #121213;
+      --tile-bg: #3a3a3c;
+      --tile-border: #3a3a3c;
+      --tile-border-empty: #3a3a3c;
+      --tile-text: #ffffff;
+      --correct: #9333ea;
+      --present: #f97316;
+      --absent: #3a3a3c;
+      --key-bg: #818384;
+      --key-text: #ffffff;
+    }
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+    body {
+      margin: 0;
+      min-height: 100svh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: var(--bg);
+      color: #ffffff;
+      font-family: 'Clear Sans', 'Helvetica Neue', Arial, sans-serif;
+    }
+    .header {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #3a3a3c;
+    }
+    .title {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .nav-link {
+      color: #818384;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 6px;
+      transition: background 0.2s, color 0.2s;
+      cursor: pointer;
+    }
+    .nav-link:hover {
+      color: #ffffff;
+      background: rgba(147, 51, 234, 0.1);
+    }
+    .nav-link.active {
+      color: #9333ea;
+    }
+
+    /* Tab bar */
+    .tab-bar {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid #3a3a3c;
+    }
+    .tab {
+      flex: 1;
+      padding: 14px 16px;
+      background: transparent;
+      border: none;
+      color: #818384;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .tab:hover {
+      color: #a0a0a0;
+    }
+    .tab.active {
+      color: #fff;
+      border-bottom-color: #9333ea;
+    }
+
+    /* Post list */
+    .post-list {
+      width: 100%;
+      max-width: 500px;
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+
+    /* Post cards */
+    .post-card {
+      display: flex;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid #2a2a2b;
+    }
+    .post-card:last-child {
+      border-bottom: none;
+    }
+    .post-avatar {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #2a2a2b;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #818384;
+      font-size: 20px;
+    }
+    .post-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .post-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .post-header {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+    .post-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: #ffffff;
+    }
+    .post-handle {
+      font-size: 13px;
+      color: #818384;
+    }
+    .post-time {
+      font-size: 13px;
+      color: #818384;
+    }
+    .post-time::before {
+      content: '·';
+      margin-right: 6px;
+    }
+    .post-content {
+      font-size: 15px;
+      line-height: 1.5;
+      color: #e7e9ea;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .post-content a {
+      color: #9333ea;
+      text-decoration: none;
+    }
+    .post-content a:hover {
+      text-decoration: underline;
+    }
+
+    /* Leaderboard entries */
+    .leaderboard-entry {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid #2a2a2b;
+    }
+    .leaderboard-entry:last-child {
+      border-bottom: none;
+    }
+    .lb-rank {
+      width: 36px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #818384;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .lb-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #2a2a2b;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #818384;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .lb-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .lb-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .lb-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .lb-stats {
+      font-size: 12px;
+      color: #818384;
+    }
+    .lb-streak {
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .lb-streak-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #9333ea;
+      line-height: 1;
+    }
+    .lb-streak-label {
+      font-size: 10px;
+      color: #818384;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+      color: #818384;
+      text-align: center;
+    }
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    .empty-state-text {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* Loading state */
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+      color: #818384;
+    }
+    .loading::after {
+      content: '';
+      width: 24px;
+      height: 24px;
+      border: 2px solid #3a3a3c;
+      border-top-color: #9333ea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #1a1a1b;
+      color: #ffffff;
+      padding: 12px 24px;
+      border-radius: 8px;
+      border: 1px solid #3a3a3c;
+      font-size: 14px;
+      z-index: 1400;
+      opacity: 0;
+      transition: transform 0.3s, opacity 0.3s;
+    }
+    #toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <button id="nostrAvatarBubble" class="avatar-bubble" aria-label="Nostr identity">🟢</button>
+      <div id="nostrAvatarDropdown" class="avatar-dropdown">
+        <div id="nostrAvatarLabel" class="avatar-label">Session: loading…</div>
+        <button class="nostr-btn nostrLoginBtn">Login with Nostr (NIP-07)</button>
+        <button id="keysOpenBtn" class="nostr-btn">View keys</button>
+        <button id="keysCopyBtn" class="nostr-btn session-only">Copy session nsec</button>
+        <button id="keysQrBtn" class="nostr-btn session-only">Show session QR</button>
+        <input id="keysImportInput" class="nostr-input session-only" placeholder="Paste nsec to import">
+        <button id="keysImportBtn" class="nostr-btn session-only">Import nsec</button>
+        <button id="keysNewPlayerBtn" class="nostr-btn">New player</button>
+      </div>
+    </div>
+    <div class="title">WORD5</div>
+    <div class="header-right">
+      <a href="index.html" class="nav-link">Play</a>
+      <span class="nav-link active">Social</span>
+    </div>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab active" data-tab="social">Social</button>
+    <button class="tab" data-tab="follows">Follows</button>
+    <button class="tab" data-tab="top">Top</button>
+  </div>
+
+  <div class="post-list" id="postList">
+    <div class="loading"></div>
+  </div>
+
+  <!-- Keys modal -->
+  <div id="keysModal">
+    <div id="keysModalInner">
+      <div style="font-weight:600;margin-bottom:12px;">Your Nostr Keys</div>
+      <div style="font-size:12px;color:#818384;margin-bottom:4px;">Public Key (npub)</div>
+      <div id="keysModalNpub"></div>
+      <div class="session-only">
+        <div style="font-size:12px;color:#818384;margin-bottom:4px;margin-top:8px;">
+          Secret Key (nsec)
+          <button id="keysModalToggle" class="nostr-btn" style="width:auto;padding:4px 8px;margin:0 0 0 8px;">Show</button>
+        </div>
+        <div id="keysModalNsec"></div>
+        <button class="nostr-btn" id="keysCopyBtn">Copy nsec</button>
+        <button class="nostr-btn" id="keysQrBtn">Show QR</button>
+        <div id="keysQrContainer"></div>
+      </div>
+      <div id="keysModalNote" style="font-size:11px;color:#818384;margin-top:8px;"></div>
+      <button class="nostr-btn" style="margin-top:12px;" id="keysModalClose">Close</button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- Load nostr modules -->
+  <script src="js/nostr-session.js"></script>
+  <script src="js/nostr-signers.js"></script>
+  <script src="js/nostr-ui.js"></script>
+  <script src="js/social-board.js" type="module"></script>
+</body>
+</html>
