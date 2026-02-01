@@ -73,24 +73,15 @@
 
     const signed = await signer.signEvent(unsigned);
 
-    const results = new Map();
-    const pub = pool.publish(relays, signed);
+    // nostr-tools v2: publish() returns array of promises
+    const pubPromises = pool.publish(relays, signed);
+    const settledResults = await Promise.allSettled(pubPromises);
 
-    await new Promise((resolve) => {
-      pub.on("ok", (relay) => {
-        results.set(relay, { status: "ok" });
-        if (results.size >= relays.length) resolve();
-      });
-      pub.on("seen", (relay) => {
-        if (!results.has(relay)) results.set(relay, { status: "seen" });
-        if (results.size >= relays.length) resolve();
-      });
-      pub.on("failed", (relay, reason) => {
-        results.set(relay, { status: "failed", reason });
-        if (results.size >= relays.length) resolve();
-      });
-      setTimeout(() => resolve(), 3000);
-    });
+    const relayResults = relays.map((relay, i) => ({
+      relay,
+      status: settledResults[i].status === 'fulfilled' ? 'ok' : 'failed',
+      reason: settledResults[i].reason?.message || undefined
+    }));
 
     try {
       pool.close(relays);
@@ -98,10 +89,7 @@
 
     return {
       event: signed,
-      relayResults: Array.from(results.entries()).map(([relay, res]) => ({
-        relay,
-        ...res,
-      })),
+      relayResults,
       signerMode: signer.mode,
     };
   }

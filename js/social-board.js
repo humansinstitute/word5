@@ -1,5 +1,5 @@
 // Social Board - Displays word5 game results from Nostr
-// Uses applesauce packages for RxJS-based relay subscriptions
+// Uses nostr-tools SimplePool for relay subscriptions
 
 const RELAYS = [
   'wss://relay.damus.io',
@@ -9,28 +9,21 @@ const RELAYS = [
 
 let pool = null;
 let activeSubscription = null;
-let profileSubscription = null;
 let currentTab = 'social';
 let seenEvents = new Set();
 let profileCache = new Map(); // pubkey -> profile data
 
-// Dynamic imports for applesauce packages
+// Dynamic imports for nostr-tools
 async function initPool() {
-  const { RelayPool } = await import('https://esm.sh/applesauce-relay@5?bundle');
-  pool = new RelayPool();
+  const { SimplePool } = await import('https://esm.sh/nostr-tools@2.10.0/pool?bundle');
+  pool = new SimplePool();
   return pool;
 }
 
 // Get nip19 for encoding/decoding
 async function getNip19() {
-  const { nip19 } = await import('https://esm.sh/nostr-tools@2?bundle');
+  const { nip19 } = await import('https://esm.sh/nostr-tools@2.10.0?bundle');
   return nip19;
-}
-
-// Get contacts helper
-async function getContactsHelper() {
-  const { getPublicContacts } = await import('https://esm.sh/applesauce-core@5/helpers?bundle');
-  return getPublicContacts;
 }
 
 // Shorten npub for display
@@ -75,23 +68,21 @@ async function loadProfiles(pubkeys) {
   const needed = pubkeys.filter(pk => !profileCache.has(pk));
   if (needed.length === 0) return;
 
-  // Subscribe to profile events
-  const sub = pool.subscription(RELAYS, [
-    { kinds: [0], authors: needed, limit: needed.length }
-  ]).subscribe({
-    next: (response) => {
-      if (response === 'EOSE') return;
-      const profile = parseProfile(response);
+  try {
+    const events = await pool.querySync(RELAYS,
+      { kinds: [0], authors: needed, limit: needed.length }
+    );
+
+    for (const event of events) {
+      const profile = parseProfile(event);
       if (profile) {
-        profileCache.set(response.pubkey, profile);
-        // Update any existing posts with this profile
-        updatePostsWithProfile(response.pubkey, profile);
+        profileCache.set(event.pubkey, profile);
+        updatePostsWithProfile(event.pubkey, profile);
       }
     }
-  });
-
-  // Auto-unsubscribe after 5 seconds
-  setTimeout(() => sub.unsubscribe(), 5000);
+  } catch (e) {
+    console.log('[Profiles] Error loading profiles:', e);
+  }
 }
 
 // Update existing posts when profile loads
@@ -99,10 +90,10 @@ async function updatePostsWithProfile(pubkey, profile) {
   const nip19 = await getNip19();
   const npub = nip19.npubEncode(pubkey);
 
-  document.querySelectorAll(`.post-card[data-pubkey="${pubkey}"]`).forEach(card => {
-    const nameEl = card.querySelector('.post-name');
+  document.querySelectorAll(`[data-pubkey="${pubkey}"]`).forEach(card => {
+    const nameEl = card.querySelector('.post-name, .lb-name');
     const handleEl = card.querySelector('.post-handle');
-    const avatarEl = card.querySelector('.post-avatar');
+    const avatarEl = card.querySelector('.post-avatar, .lb-avatar');
 
     if (nameEl && profile.displayName) {
       nameEl.textContent = profile.displayName;
@@ -129,7 +120,6 @@ function escapeHtml(str) {
 
 // Convert URLs in text to links
 function linkifyContent(content) {
-  // Simple URL regex
   const urlPattern = /(https?:\/\/[^\s<]+)/g;
   return escapeHtml(content).replace(urlPattern, '<a href="$1" target="_blank" rel="noopener">$1</a>');
 }
@@ -241,35 +231,47 @@ async function addPost(event) {
   loadProfiles([event.pubkey]);
 }
 
-// Subscribe to word5 posts (Social tab)
+// Close active subscription
+function closeSubscription() {
+  if (activeSubscription) {
+    try {
+      activeSubscription.close();
+    } catch (e) {
+      // Ignore close errors
+    }
+    activeSubscription = null;
+  }
+}
+
+// Load word5 posts (Social tab)
 async function subscribeToSocial() {
   if (!pool) await initPool();
 
   showLoading();
   clearPosts();
 
-  // Subscribe to word5 tagged posts
-  activeSubscription = pool.subscription(RELAYS, [
-    { kinds: [1], '#t': ['word5'], limit: 50 }
-  ]).subscribe({
-    next: async (response) => {
-      // Filter out EOSE messages
-      if (response === 'EOSE') return;
-      await addPost(response);
-    },
-    error: (err) => {
-      console.error('Subscription error:', err);
-      showEmptyState('Error loading posts. Please try again.');
-    }
-  });
+  try {
+    console.log('[Social] Querying word5 posts...');
+    const events = await pool.querySync(RELAYS,
+      { kinds: [1], '#t': ['word5'], limit: 50 }
+    );
 
-  // Show empty state after timeout if no posts
-  setTimeout(() => {
-    const postList = document.getElementById('postList');
-    if (postList.querySelector('.loading')) {
+    console.log('[Social] Found', events.length, 'posts');
+
+    if (!events || events.length === 0) {
       showEmptyState('No word5 posts found yet. Be the first to share!');
+      return;
     }
-  }, 5000);
+
+    // Sort by timestamp (newest first) and add posts
+    events.sort((a, b) => b.created_at - a.created_at);
+    for (const event of events) {
+      await addPost(event);
+    }
+  } catch (e) {
+    console.error('[Social] Error:', e);
+    showEmptyState('Error loading posts. Please try again.');
+  }
 }
 
 // Subscribe to follows' posts (Follows tab)
@@ -292,79 +294,52 @@ async function subscribeToFollows() {
     return;
   }
 
-  const getPublicContacts = await getContactsHelper();
+  try {
+    // First, load user's contact list (kind 3)
+    const contactEvents = await pool.querySync(RELAYS,
+      { kinds: [3], authors: [userPubkey], limit: 1 }
+    );
 
-  // First, load user's contact list
-  let contactsFound = false;
-
-  const contactsSub = pool.subscription(RELAYS, [
-    { kinds: [3], authors: [userPubkey], limit: 1 }
-  ]).subscribe({
-    next: async (response) => {
-      if (response === 'EOSE') {
-        if (!contactsFound) {
-          showEmptyState('No contacts found for this key. Follow some people to see their word5 posts here.');
-        }
-        contactsSub.unsubscribe();
-        return;
-      }
-
-      contactsFound = true;
-
-      // Parse contacts
-      const follows = getPublicContacts(response);
-
-      if (follows.length === 0) {
-        showEmptyState('No contacts found for this key. Follow some people to see their word5 posts here.');
-        contactsSub.unsubscribe();
-        return;
-      }
-
-      // Get pubkeys
-      const followPubkeys = follows.map(f => f.pubkey);
-
-      // Unsubscribe from contacts query
-      contactsSub.unsubscribe();
-
-      // Clear and start fresh
-      clearPosts();
-      showLoading();
-
-      // Subscribe to word5 posts from follows
-      activeSubscription = pool.subscription(RELAYS, [
-        { kinds: [1], '#t': ['word5'], authors: followPubkeys, limit: 50 }
-      ]).subscribe({
-        next: async (response) => {
-          if (response === 'EOSE') return;
-          await addPost(response);
-        },
-        error: (err) => {
-          console.error('Follows subscription error:', err);
-          showEmptyState('Error loading posts from follows.');
-        }
-      });
-
-      // Show empty state after timeout if no posts
-      setTimeout(() => {
-        const postList = document.getElementById('postList');
-        if (postList.querySelector('.loading')) {
-          showEmptyState('No word5 posts from your follows yet.');
-        }
-      }, 5000);
-    },
-    error: (err) => {
-      console.error('Contacts subscription error:', err);
-      showEmptyState('Error loading contacts.');
-    }
-  });
-
-  // Timeout for contacts query
-  setTimeout(() => {
-    if (!contactsFound) {
-      contactsSub.unsubscribe();
+    if (!contactEvents || contactEvents.length === 0) {
       showEmptyState('No contacts found for this key. Follow some people to see their word5 posts here.');
+      return;
     }
-  }, 5000);
+
+    // Parse contacts from p tags
+    const contactEvent = contactEvents[0];
+    const followPubkeys = contactEvent.tags
+      .filter(t => t[0] === 'p' && t[1])
+      .map(t => t[1]);
+
+    if (followPubkeys.length === 0) {
+      showEmptyState('No contacts found for this key. Follow some people to see their word5 posts here.');
+      return;
+    }
+
+    console.log('[Follows] Found', followPubkeys.length, 'contacts');
+
+    // Query word5 posts from follows
+    const events = await pool.querySync(RELAYS,
+      { kinds: [1], '#t': ['word5'], authors: followPubkeys, limit: 50 }
+    );
+
+    console.log('[Follows] Found', events.length, 'posts from follows');
+
+    if (!events || events.length === 0) {
+      showEmptyState('No word5 posts from your follows yet.');
+      return;
+    }
+
+    // Sort by timestamp (newest first) and add posts
+    events.sort((a, b) => b.created_at - a.created_at);
+    for (const event of events) {
+      await addPost(event);
+    }
+
+  } catch (e) {
+    console.error('[Follows] Error:', e);
+    showEmptyState('Error loading contacts. Please try again.');
+  }
 }
 
 // Get tag value from event
@@ -384,7 +359,6 @@ async function renderLeaderboardEntry(event, rank) {
   const avatar = profile?.picture;
 
   // Get stats from tags
-  const streak = getTagValue(event, 'streak');
   const maxStreak = getTagValue(event, 'maxStreak');
   const played = getTagValue(event, 'played');
   const won = getTagValue(event, 'won');
@@ -429,48 +403,33 @@ async function subscribeToTop() {
   showLoading();
   clearPosts();
 
-  const collectedEvents = [];
-  const seenPubkeys = new Set();
+  try {
+    // Query for word5 posts with streak data
+    const events = await pool.querySync(RELAYS,
+      { kinds: [1], '#t': ['word5'], limit: 200 }
+    );
 
-  // Subscribe to word5 posts to find ones with streak data
-  activeSubscription = pool.subscription(RELAYS, [
-    { kinds: [1], '#t': ['word5'], limit: 200 }
-  ]).subscribe({
-    next: async (response) => {
-      if (response === 'EOSE') {
-        // EOSE received - now process and display leaderboard
-        displayLeaderboard(collectedEvents);
-        return;
-      }
+    console.log('[Top] Found', events.length, 'events');
 
-      // Only keep the best post per user (highest maxStreak)
-      const maxStreak = getTagValue(response, 'maxStreak');
+    // Deduplicate - keep best post per user
+    const bestByUser = new Map();
+    for (const event of events) {
+      const maxStreak = getTagValue(event, 'maxStreak');
       if (maxStreak > 0) {
-        // Check if we already have a post from this user
-        const existingIdx = collectedEvents.findIndex(e => e.pubkey === response.pubkey);
-        if (existingIdx >= 0) {
-          // Keep the one with higher maxStreak
-          const existingMax = getTagValue(collectedEvents[existingIdx], 'maxStreak');
-          if (maxStreak > existingMax) {
-            collectedEvents[existingIdx] = response;
-          }
-        } else {
-          collectedEvents.push(response);
+        const existing = bestByUser.get(event.pubkey);
+        if (!existing || maxStreak > getTagValue(existing, 'maxStreak')) {
+          bestByUser.set(event.pubkey, event);
         }
       }
-    },
-    error: (err) => {
-      console.error('Top subscription error:', err);
-      showEmptyState('Error loading leaderboard. Please try again.');
     }
-  });
 
-  // Timeout - display whatever we have after 5 seconds
-  setTimeout(() => {
-    if (collectedEvents.length > 0) {
-      displayLeaderboard(collectedEvents);
-    }
-  }, 5000);
+    const collectedEvents = Array.from(bestByUser.values());
+    displayLeaderboard(collectedEvents);
+
+  } catch (e) {
+    console.error('[Top] Error:', e);
+    showEmptyState('Error loading leaderboard. Please try again.');
+  }
 }
 
 // Display the leaderboard
@@ -508,11 +467,6 @@ async function displayLeaderboard(events) {
   }
 }
 
-// Show Top tab
-function showTopTab() {
-  subscribeToTop();
-}
-
 // Get tab from URL
 function getTabFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -537,10 +491,7 @@ function updateUrl(tabName, replace = false) {
 // Switch tab
 function switchTab(tabName, updateHistory = true) {
   // Cleanup previous subscription
-  if (activeSubscription) {
-    activeSubscription.unsubscribe();
-    activeSubscription = null;
-  }
+  closeSubscription();
 
   currentTab = tabName;
 
@@ -563,7 +514,7 @@ function switchTab(tabName, updateHistory = true) {
       subscribeToFollows();
       break;
     case 'top':
-      showTopTab();
+      subscribeToTop();
       break;
   }
 }

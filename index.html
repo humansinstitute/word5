@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="512x512" href="assets/icon-word5.png">
   <link rel="shortcut icon" type="image/png" sizes="512x512" href="assets/icon-word5.png">
@@ -131,13 +131,19 @@
     }
     body {
       margin: 0;
-      min-height: 100svh;
+      height: 100dvh; /* Use dynamic viewport height */
+      height: 100vh; /* Fallback for older browsers */
       display: flex;
       flex-direction: column;
       align-items: center;
       background: var(--bg);
       color: #ffffff;
       font-family: 'Clear Sans', 'Helvetica Neue', Arial, sans-serif;
+      /* Account for browser bottom bars */
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    @supports (height: 100dvh) {
+      body { height: 100dvh; }
     }
     .header {
       width: 100%;
@@ -186,12 +192,22 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: space-between;
       flex: 1;
       width: 100%;
       max-width: 500px;
-      padding: 16px;
-      gap: 16px;
+      padding: 8px 16px;
+      gap: 8px;
+      min-height: 0; /* Allow flex children to shrink below content size */
+      overflow: hidden;
+    }
+    .board-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .board {
       display: grid;
@@ -206,13 +222,13 @@
       gap: 5px;
     }
     .tile {
-      width: 58px;
-      height: 58px;
+      width: clamp(48px, 12vw, 58px);
+      height: clamp(48px, 12vw, 58px);
       border: 2px solid var(--tile-border-empty);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 32px;
+      font-size: clamp(24px, 6vw, 32px);
       font-weight: 700;
       text-transform: uppercase;
       transition: transform 0.1s;
@@ -258,8 +274,9 @@
       gap: 6px;
       width: 100%;
       max-width: 484px;
-      padding: 0 4px;
+      padding: 0 4px 8px 4px;
       box-sizing: border-box;
+      flex-shrink: 0; /* Never shrink the keyboard */
     }
     .keyboard-row {
       display: flex;
@@ -422,6 +439,71 @@
     #postNostrBtn {
       background: #8b5cf6;
     }
+    /* Hard mode toggle styles */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #3a3a3c;
+      margin-bottom: 10px;
+    }
+    .toggle-label {
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .toggle-sublabel {
+      color: #818384;
+      font-size: 10px;
+      margin-top: 2px;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #3a3a3c;
+      border-radius: 24px;
+      transition: 0.2s;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: #ffffff;
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: #9333ea;
+    }
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+    }
+    .toggle-switch input:disabled + .toggle-slider {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .hard-mode-indicator {
+      color: #f97316;
+      font-size: 10px;
+      font-weight: 700;
+      margin-left: 8px;
+    }
   </style>
 </head>
 <body>
@@ -429,6 +511,16 @@
     <div class="header-left">
       <button id="nostrAvatarBubble" class="avatar-bubble" aria-label="Nostr identity">🟢</button>
       <div id="nostrAvatarDropdown" class="avatar-dropdown">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Hard Mode</div>
+            <div class="toggle-sublabel">Must use revealed hints</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="hardModeToggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
         <div id="nostrAvatarLabel" class="avatar-label">Session: loading…</div>
         <button class="nostr-btn nostrLoginBtn">Login with Nostr (NIP-07)</button>
         <button id="keysOpenBtn" class="nostr-btn">View keys</button>
@@ -439,7 +531,7 @@
         <button id="keysNewPlayerBtn" class="nostr-btn">New player</button>
       </div>
     </div>
-    <div class="title">WORD5</div>
+    <div class="title">WORD5<span id="hardModeIndicator" class="hard-mode-indicator" style="display:none;">*</span></div>
     <div class="header-right">
       <span class="nav-link active">Play</span>
       <a href="social.html" class="nav-link">Social</a>
@@ -447,8 +539,10 @@
   </div>
 
   <div class="game-container">
-    <div class="board" id="board"></div>
-    <div class="timer" id="timer">Next word in: --:--:--</div>
+    <div class="board-section">
+      <div class="board" id="board"></div>
+      <div class="timer" id="timer">Next word in: --:--:--</div>
+    </div>
     <div class="keyboard" id="keyboard"></div>
   </div>
 
@@ -580,6 +674,7 @@
       gameOver: false,
       won: false,
       periodId: 0,
+      hardMode: false,
       stats: {
         played: 0,
         won: 0,
@@ -646,6 +741,33 @@
       const seconds = totalSeconds % 60;
       return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     }
+
+    // Update hard mode toggle state (called when guesses change)
+    window.updateHardModeToggleState = function() {
+      const hardModeToggle = document.getElementById('hardModeToggle');
+      const hardModeIndicator = document.getElementById('hardModeIndicator');
+
+      // Update title indicator
+      if (hardModeIndicator) {
+        hardModeIndicator.style.display = state.hardMode ? 'inline' : 'none';
+      }
+
+      if (!hardModeToggle) return;
+
+      // Sync checkbox state
+      hardModeToggle.checked = state.hardMode;
+
+      const canToggle = state.guesses.length === 0 && !state.gameOver;
+      hardModeToggle.disabled = !canToggle;
+      const sublabel = document.querySelector('.toggle-sublabel');
+      if (sublabel) {
+        if (!canToggle && !state.gameOver) {
+          sublabel.textContent = 'Only at puzzle start';
+        } else {
+          sublabel.textContent = 'Must use revealed hints';
+        }
+      }
+    };
 
     // Show toast message
     function showToast(message, duration = 1500) {
@@ -780,6 +902,77 @@
       });
     }
 
+    // Check hard mode constraints
+    // Returns { valid: true } or { valid: false, message: string }
+    function checkHardModeConstraints(guess) {
+      if (!state.hardMode || state.guesses.length === 0) {
+        return { valid: true };
+      }
+
+      // Build constraints from all previous guesses
+      const requiredPositions = {}; // letter -> [positions where it must be]
+      const requiredLetters = {};   // letter -> minimum count required
+
+      for (const prevGuess of state.guesses) {
+        const result = evaluateGuess(prevGuess);
+        const letterCounts = {};
+
+        prevGuess.split('').forEach((letter, i) => {
+          if (result[i] === 'correct') {
+            // Must have this letter at this position
+            if (!requiredPositions[letter]) requiredPositions[letter] = [];
+            if (!requiredPositions[letter].includes(i)) {
+              requiredPositions[letter].push(i);
+            }
+            letterCounts[letter] = (letterCounts[letter] || 0) + 1;
+          } else if (result[i] === 'present') {
+            // Must include this letter somewhere
+            letterCounts[letter] = (letterCounts[letter] || 0) + 1;
+          }
+        });
+
+        // Update required minimum counts
+        for (const [letter, count] of Object.entries(letterCounts)) {
+          requiredLetters[letter] = Math.max(requiredLetters[letter] || 0, count);
+        }
+      }
+
+      // Check guess against constraints
+      const guessLetters = guess.split('');
+
+      // Check correct positions first
+      for (const [letter, positions] of Object.entries(requiredPositions)) {
+        for (const pos of positions) {
+          if (guessLetters[pos] !== letter) {
+            const ordinal = pos + 1;
+            const suffix = ordinal === 1 ? 'st' : ordinal === 2 ? 'nd' : ordinal === 3 ? 'rd' : 'th';
+            return {
+              valid: false,
+              message: `${ordinal}${suffix} letter must be ${letter}`
+            };
+          }
+        }
+      }
+
+      // Check required letters are present with minimum counts
+      const guessCounts = {};
+      guessLetters.forEach(l => {
+        guessCounts[l] = (guessCounts[l] || 0) + 1;
+      });
+
+      for (const [letter, minCount] of Object.entries(requiredLetters)) {
+        const guessCount = guessCounts[letter] || 0;
+        if (guessCount < minCount) {
+          return {
+            valid: false,
+            message: `Guess must contain ${letter}`
+          };
+        }
+      }
+
+      return { valid: true };
+    }
+
     // Handle key press
     function handleKey(key) {
       if (state.gameOver) return;
@@ -815,9 +1008,22 @@
         return;
       }
 
+      // Check hard mode constraints
+      const hardModeCheck = checkHardModeConstraints(state.currentGuess);
+      if (!hardModeCheck.valid) {
+        const row = boardEl.querySelectorAll('.row')[state.guesses.length];
+        row.classList.add('shake');
+        setTimeout(() => row.classList.remove('shake'), 300);
+        showToast(hardModeCheck.message);
+        return;
+      }
+
       const guess = state.currentGuess;
       state.guesses.push(guess);
       state.currentGuess = '';
+
+      // Lock hard mode toggle after first guess
+      window.updateHardModeToggleState();
 
       // Animate reveal
       const rowIndex = state.guesses.length - 1;
@@ -887,7 +1093,8 @@
     // Generate share text
     function generateShareText() {
       const periodNum = state.periodId % 1000;
-      let text = `WORD5 #${periodNum} ${state.won ? state.guesses.length : 'X'}/${MAX_GUESSES}\n\n`;
+      const hardModeStr = state.hardMode ? '*' : '';
+      let text = `WORD5 #${periodNum} ${state.won ? state.guesses.length : 'X'}/${MAX_GUESSES}${hardModeStr}${state.hardMode ? ' (Hard Mode)' : ''}\n\n`;
 
       state.guesses.forEach(guess => {
         const result = evaluateGuess(guess);
@@ -910,6 +1117,7 @@
         guesses: state.guesses,
         gameOver: state.gameOver,
         won: state.won,
+        hardMode: state.hardMode,
         stats: state.stats
       };
       localStorage.setItem('words-game', JSON.stringify(saveData));
@@ -922,6 +1130,8 @@
         try {
           const data = JSON.parse(saved);
           state.stats = data.stats || state.stats;
+          // Hard mode persists across sessions
+          state.hardMode = data.hardMode || false;
 
           // Check if it's the same period
           if (data.periodId === state.periodId) {
@@ -932,6 +1142,140 @@
         } catch (e) {
           console.error('Failed to load state:', e);
         }
+      }
+    }
+
+    // Background sync stats from Nostr (runs silently, doesn't block UI)
+    async function syncStatsFromNostr() {
+      console.log('[Nostr Sync] Starting background sync...');
+      try {
+        // Wait for NostrSession to be ready
+        if (window.NostrSigners?.ready) {
+          await window.NostrSigners.ready();
+        }
+
+        if (!window.NostrSigners) {
+          console.log('[Nostr Sync] NostrSigners not available');
+          return;
+        }
+
+        const signer = await window.NostrSigners.getActiveSigner();
+        const pubkey = await signer.getPublicKey();
+        console.log('[Nostr Sync] Got pubkey:', pubkey.slice(0, 12) + '...');
+
+        const { SimplePool } = await import('https://esm.sh/nostr-tools@2?bundle');
+        const pool = new SimplePool();
+        const relays = window.NostrPost?.DEFAULT_RELAYS || [
+          'wss://relay.damus.io',
+          'wss://nos.lol',
+          'wss://relay.snort.social'
+        ];
+
+        // Query for this user's word5 posts (use #t tag - relays index standard tags)
+        console.log('[Nostr Sync] Querying relays:', relays);
+        const events = await pool.querySync(relays,
+          { kinds: [1], authors: [pubkey], '#t': ['word5'], limit: 100 }
+        );
+
+        try { pool.close(relays); } catch (_) {}
+
+        console.log('[Nostr Sync] Found', events?.length || 0, 'posts');
+
+        if (!events || events.length === 0) {
+          console.log('[Nostr Sync] No posts found for this pubkey');
+          return;
+        }
+
+        // Sort by created_at descending (most recent first)
+        events.sort((a, b) => b.created_at - a.created_at);
+
+        // Parse stats from all events, find highest values
+        let nostrMaxStreak = 0;
+        let nostrPlayed = 0;
+        let nostrWon = 0;
+        let mostRecentStreak = 0;
+        let mostRecentPuzzle = 0;
+
+        for (const event of events) {
+          const tags = Object.fromEntries(
+            event.tags.filter(t => ['streak', 'maxStreak', 'played', 'won', 'puzzle'].includes(t[0]))
+              .map(t => [t[0], parseInt(t[1], 10) || 0])
+          );
+
+          // Track highest maxStreak across all posts
+          if (tags.maxStreak > nostrMaxStreak) nostrMaxStreak = tags.maxStreak;
+          if (tags.played > nostrPlayed) nostrPlayed = tags.played;
+          if (tags.won > nostrWon) nostrWon = tags.won;
+
+          // For most recent post, get streak and puzzle number
+          if (event === events[0]) {
+            mostRecentStreak = tags.streak || 0;
+            // Try to parse puzzle number from content (e.g., "WORD5 #478")
+            const puzzleMatch = event.content.match(/WORD5\s*#(\d+)/i);
+            if (puzzleMatch) {
+              mostRecentPuzzle = parseInt(puzzleMatch[1], 10);
+            } else {
+              mostRecentPuzzle = tags.puzzle || 0;
+            }
+          }
+        }
+
+        // Determine if streak is still valid
+        // Current puzzle number
+        const currentPuzzle = state.periodId % 1000;
+
+        // Streak is valid if last post was for previous puzzle (or current)
+        const streakStillValid = (mostRecentPuzzle === currentPuzzle - 1) ||
+                                  (mostRecentPuzzle === currentPuzzle);
+
+        const validStreak = streakStillValid ? mostRecentStreak : 0;
+
+        console.log('[Nostr Sync] Parsed from Nostr:', {
+          posts: events.length,
+          mostRecentPuzzle,
+          currentPuzzle,
+          streakStillValid,
+          nostr: { streak: mostRecentStreak, maxStreak: nostrMaxStreak, played: nostrPlayed, won: nostrWon },
+          local: { streak: state.stats.streak, maxStreak: state.stats.maxStreak, played: state.stats.played, won: state.stats.won }
+        });
+
+        // Update local state if Nostr has higher values
+        let updated = false;
+
+        if (nostrMaxStreak > state.stats.maxStreak) {
+          state.stats.maxStreak = nostrMaxStreak;
+          updated = true;
+        }
+        if (validStreak > state.stats.streak) {
+          state.stats.streak = validStreak;
+          updated = true;
+        }
+        if (nostrPlayed > state.stats.played) {
+          state.stats.played = nostrPlayed;
+          updated = true;
+        }
+        if (nostrWon > state.stats.won) {
+          state.stats.won = nostrWon;
+          updated = true;
+        }
+
+        if (updated) {
+          saveState();
+          // Update UI if stats are visible
+          document.getElementById('statStreak').textContent = state.stats.streak;
+          document.getElementById('statMaxStreak').textContent = state.stats.maxStreak;
+          document.getElementById('statPlayed').textContent = state.stats.played;
+          const winPct = state.stats.played > 0
+            ? Math.round((state.stats.won / state.stats.played) * 100)
+            : 0;
+          document.getElementById('statWinPct').textContent = winPct;
+          console.log('[Nostr Sync] ✓ Stats updated from Nostr');
+        } else {
+          console.log('[Nostr Sync] No updates needed (local stats are current)');
+        }
+      } catch (e) {
+        // Silently fail - this is background sync, don't disrupt the game
+        console.log('[Nostr Sync] Skipped:', e.message || e);
       }
     }
 
@@ -967,6 +1311,26 @@
 
       // Update timer every second
       setInterval(updateTimer, 1000);
+
+      // Initialize hard mode toggle
+      const hardModeToggle = document.getElementById('hardModeToggle');
+      hardModeToggle.checked = state.hardMode;
+      window.updateHardModeToggleState();
+
+      hardModeToggle.addEventListener('change', () => {
+        if (state.guesses.length > 0) {
+          // Revert toggle - can't change mid-game
+          hardModeToggle.checked = state.hardMode;
+          showToast('Can only change at puzzle start');
+          return;
+        }
+        state.hardMode = hardModeToggle.checked;
+        saveState();
+        showToast(state.hardMode ? 'Hard mode ON' : 'Hard mode OFF');
+      });
+
+      // Background sync stats from Nostr (don't await - runs silently)
+      syncStatsFromNostr();
 
       // If game was already over, show result
       if (state.gameOver) {
@@ -1021,10 +1385,7 @@
           const relays = window.NostrPost.DEFAULT_RELAYS;
           const periodNum = state.periodId % 1000;
 
-          const unsigned = {
-            kind: 1,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
+          const tags = [
               ['t', 'word5'],
               ['t', 'wordle'],
               ['game', 'word5'],
@@ -1035,20 +1396,24 @@
               ['maxStreak', String(state.stats.maxStreak)],
               ['played', String(state.stats.played)],
               ['won', String(state.stats.won)]
-            ],
+            ];
+          if (state.hardMode) {
+            tags.push(['hardMode', 'true']);
+          }
+
+          const unsigned = {
+            kind: 1,
+            created_at: Math.floor(Date.now() / 1000),
+            tags,
             content
           };
 
           const signed = await signer.signEvent(unsigned);
-          const pub = pool.publish(relays, signed);
+          const pubPromises = pool.publish(relays, signed);
 
-          let succeeded = false;
-          await new Promise((resolve) => {
-            let responded = 0;
-            pub.on('ok', () => { succeeded = true; responded++; resolve(); });
-            pub.on('failed', () => { responded++; if (responded >= relays.length) resolve(); });
-            setTimeout(resolve, 5000);
-          });
+          // nostr-tools v2: publish() returns array of promises
+          const results = await Promise.allSettled(pubPromises);
+          const succeeded = results.some(r => r.status === 'fulfilled');
 
           try { pool.close(relays); } catch (_) {}
 
