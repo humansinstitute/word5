@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+
+# Development
+.claude/
+.worktrees/
+node_modules/
+*.md
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build configs (not needed in container)
+captain-definition
+Dockerfile
+.dockerignore
+package.json
+bun.lockb

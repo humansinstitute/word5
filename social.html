@@ -435,6 +435,7 @@
         <input id="keysImportInput" class="nostr-input session-only" placeholder="Paste nsec to import">
         <button id="keysImportBtn" class="nostr-btn session-only">Import nsec</button>
         <button id="keysNewPlayerBtn" class="nostr-btn">New player</button>
+        <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
       </div>
     </div>
     <div class="title">WORD5</div>
@@ -452,6 +453,19 @@
 
   <div class="post-list" id="postList">
     <div class="loading"></div>
+  </div>
+
+  <!-- Streak modal -->
+  <div id="streakModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:1300;padding:12px;">
+    <div style="width:min(92vw,400px);background:#1a1a1b;border:1px solid #3a3a3c;color:#fff;border-radius:10px;padding:20px;box-shadow:0 12px 30px rgba(0,0,0,0.5);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-weight:700;font-size:18px;">My Stats</div>
+        <button id="streakModalClose" class="nostr-btn" style="width:auto;padding:8px 12px;margin:0;">Close</button>
+      </div>
+      <div id="streakModalContent" style="text-align:center;">
+        <div style="color:#818384;padding:24px;">Loading...</div>
+      </div>
+    </div>
   </div>
 
   <!-- Keys modal -->
