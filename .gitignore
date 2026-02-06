@@ -1,2 +1,4 @@
 .worktrees/
 .worktrees*
+apps/logs/
+*.log
