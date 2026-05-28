@@ -117,6 +117,20 @@
     const npub = nip19.npubEncode(pubkey);
     return updatePlayer({
       auth_mode: "nip07",
+      bunker_uri: null,
+      linked_pubkey: pubkey,
+      linked_npub: npub,
+      linked_at: Date.now(),
+    });
+  }
+
+  function loginWithBunker({ bunkerUri, pubkey, npub }) {
+    if (!bunkerUri || !pubkey || !npub) {
+      throw new Error("Missing bunker connection details");
+    }
+    return updatePlayer({
+      auth_mode: "bunker",
+      bunker_uri: bunkerUri,
       linked_pubkey: pubkey,
       linked_npub: npub,
       linked_at: Date.now(),
@@ -126,6 +140,7 @@
   function unlinkNip07() {
     const p = load() || {};
     const cleaned = { ...p };
+    delete cleaned.bunker_uri;
     delete cleaned.linked_pubkey;
     delete cleaned.linked_npub;
     delete cleaned.linked_at;
@@ -149,6 +164,7 @@
     importNsec,
     exportNsec,
     loginWithNip07,
+    loginWithBunker,
     unlinkNip07,
     whenReady,
   };

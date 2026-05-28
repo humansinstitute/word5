@@ -20,15 +20,15 @@
     .avatar-bubble {
       width: 36px;
       height: 36px;
-      border-radius: 50%;
-      border: 2px solid #3a3a3c;
+      border-radius: 8px;
+      border: 1px solid #3a3a3c;
       background: #1a1a1b;
-      color: #9333ea;
+      color: #ffffff;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 20px;
       transition: transform 0.1s ease;
     }
     .avatar-bubble:active { transform: translateY(1px); }
@@ -110,6 +110,73 @@
       height: 40px;
       font-size: 16px;
     }
+    .help-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 2px solid #3a3a3c;
+      background: transparent;
+      color: #818384;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .help-btn:hover {
+      color: #ffffff;
+      border-color: #818384;
+    }
+    #helpModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      align-items: center;
+      justify-content: center;
+      z-index: 1300;
+      padding: 12px;
+    }
+    #helpModal.visible { display: flex; }
+    #helpModalInner {
+      width: min(92vw, 400px);
+      background: #1a1a1b;
+      border: 1px solid #3a3a3c;
+      color: #ffffff;
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    #helpModalInner h3 {
+      margin: 0 0 12px;
+      font-size: 16px;
+    }
+    #helpModalInner p {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: #b0b0b0;
+      line-height: 1.5;
+    }
+    .help-key-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .help-swatch {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .help-key-label {
+      font-size: 13px;
+      line-height: 1.4;
+    }
     #keysQrContainer { margin-top: 8px; display: flex; justify-content: center; }
     :root {
       --bg: #121213;
@@ -165,6 +232,15 @@
       color: #818384;
       text-align: center;
       padding: 8px 0;
+    }
+    .timer-identity {
+      font-size: 14px;
+      color: #818384;
+      text-align: center;
+      padding-bottom: 8px;
+    }
+    .timer-identity[hidden] {
+      display: none;
     }
     .header-right {
       display: flex;
@@ -422,6 +498,7 @@
       gap: 10px;
       justify-content: center;
       margin-top: 16px;
+      width: 100%;
     }
     .modal button {
       padding: 14px 24px;
@@ -433,11 +510,35 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .modal-buttons button {
+      flex: 1;
+      min-width: 0;
+      padding-left: 12px;
+      padding-right: 12px;
+      white-space: nowrap;
+    }
     .modal button:hover {
       opacity: 0.9;
     }
     #postNostrBtn {
       background: #8b5cf6;
+    }
+    .completion-donate {
+      display: none;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #3a3a3c;
+    }
+    .completion-donate.visible {
+      display: block;
+    }
+    .completion-donate p {
+      margin: 0 0 12px;
+      line-height: 1.4;
+    }
+    .completion-donate button {
+      background: #f97316;
+      width: 100%;
     }
     /* Hard mode toggle styles */
     .toggle-row {
@@ -509,7 +610,7 @@
 <body>
   <div class="header">
     <div class="header-left">
-      <button id="nostrAvatarBubble" class="avatar-bubble" aria-label="Nostr identity">🟢</button>
+      <button id="nostrAvatarBubble" class="avatar-bubble" aria-label="Menu">☰</button>
       <div id="nostrAvatarDropdown" class="avatar-dropdown">
         <div class="toggle-row">
           <div>
@@ -522,20 +623,19 @@
           </label>
         </div>
         <div id="nostrAvatarLabel" class="avatar-label">Session: loading…</div>
-        <button class="nostr-btn nostrLoginBtn">Login with Nostr (NIP-07)</button>
-        <button id="keysOpenBtn" class="nostr-btn">View keys</button>
-        <button id="keysCopyBtn" class="nostr-btn session-only">Copy session nsec</button>
-        <button id="keysQrBtn" class="nostr-btn session-only">Show session QR</button>
-        <input id="keysImportInput" class="nostr-input session-only" placeholder="Paste nsec to import">
-        <button id="keysImportBtn" class="nostr-btn session-only">Import nsec</button>
-        <button id="keysNewPlayerBtn" class="nostr-btn">New player</button>
+        <button id="loginNostrBtn" class="nostr-btn" style="background:#9333ea;">Login Nostr</button>
+        <button id="profileOpenBtn" class="nostr-btn">My Profile</button>
+        <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
+        <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
       </div>
     </div>
     <div class="title">WORD5<span id="hardModeIndicator" class="hard-mode-indicator" style="display:none;">*</span></div>
     <div class="header-right">
+      <button id="donateBtn" class="nav-link" aria-label="Donate" style="border:none;background:none;padding:6px 8px;font-size:16px;cursor:pointer;">⚡</button>
       <span class="nav-link active">Play</span>
       <a href="social.html" class="nav-link">Social</a>
+      <button id="helpBtn" class="help-btn" aria-label="How to play">?</button>
     </div>
   </div>
 
@@ -543,6 +643,7 @@
     <div class="board-section">
       <div class="board" id="board"></div>
       <div class="timer" id="timer">Next word in: --:--:--</div>
+      <div class="timer-identity" id="timerIdentityLabel" hidden></div>
     </div>
     <div class="keyboard" id="keyboard"></div>
   </div>
@@ -576,6 +677,10 @@
         <div class="next-word-label">NEXT WORD</div>
         <div class="next-word-timer" id="modalTimer">--:--:--</div>
       </div>
+      <div id="completionDonate" class="completion-donate">
+        <p>Word5 is a free game, but hosted on real servers. If you find it valuable, please consider donating</p>
+        <button id="completionDonateBtn">Donate</button>
+      </div>
       <div class="modal-buttons">
         <button id="shareBtn">Share</button>
         <button id="postNostrBtn">Post to Nostr</button>
@@ -599,7 +704,7 @@
   <div id="keysModal">
     <div id="keysModalInner">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-        <div style="font-weight:700; font-size:14px;">Session Keys</div>
+        <div style="font-weight:700; font-size:14px;">User | Password</div>
         <button id="keysModalClose" class="nostr-btn" style="width:auto; padding:8px 12px; margin:0;">Close</button>
       </div>
       <div id="keysModalNpub"></div>
@@ -608,7 +713,33 @@
         <button id="keysModalToggle" class="nostr-btn" aria-label="Reveal private key">👁</button>
       </div>
       <div id="keysModalNote" style="font-size:11px; color:#818384; margin-top:8px;"></div>
-      <div id="keysQrContainer"></div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button id="npubCopyBtn" class="nostr-btn" style="flex:1; margin:0;">Copy Username</button>
+        <button id="keysCopyBtn" class="nostr-btn session-only" style="flex:1; margin:0;">Copy Password</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="helpModal">
+    <div id="helpModalInner">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <h3 style="margin:0;">How to Play</h3>
+        <button id="helpModalClose" class="nostr-btn" style="width:auto; padding:8px 12px; margin:0;">Close</button>
+      </div>
+      <p>Guess the 5-letter word in 6 tries. A new word appears every 24 hours. After each guess, the tiles change colour to show how close you are.</p>
+      <div class="help-key-row">
+        <div class="help-swatch" style="background:#9333ea;"></div>
+        <div class="help-key-label"><strong>Purple</strong> — correct letter in the correct spot</div>
+      </div>
+      <div class="help-key-row">
+        <div class="help-swatch" style="background:#f97316;"></div>
+        <div class="help-key-label"><strong>Orange</strong> — correct letter but in the wrong spot</div>
+      </div>
+      <div class="help-key-row">
+        <div class="help-swatch" style="background:#3a3a3c;"></div>
+        <div class="help-key-label"><strong>Grey</strong> — letter is not in the word</div>
+      </div>
+      <p style="margin-top:14px; font-size:12px; color:#818384;">The keyboard also updates with these colours to help you track which letters you've used.</p>
     </div>
   </div>
 
@@ -680,6 +811,8 @@
     }
 
     // Game state
+    let _nostrSyncPromise = null;
+
     let state = {
       targetWord: '',
       guesses: [],
@@ -706,6 +839,8 @@
     const modalMessage = document.getElementById('modalMessage');
     const modalWord = document.getElementById('modalWord');
     const modalTimer = document.getElementById('modalTimer');
+    const completionDonate = document.getElementById('completionDonate');
+    const completionDonateBtn = document.getElementById('completionDonateBtn');
     const shareBtn = document.getElementById('shareBtn');
 
     // Calculate current 4-hour period
@@ -1055,8 +1190,15 @@
       });
 
       // Update keyboard after animation
-      setTimeout(() => {
+      setTimeout(async () => {
         updateKeyboard();
+
+        // Ensure Nostr sync is complete before updating stats
+        // This prevents streak resetting after cache clear
+        if (_nostrSyncPromise) {
+          try { await _nostrSyncPromise; } catch (_) {}
+          _nostrSyncPromise = null;
+        }
 
         // Check win/lose
         if (guess === state.targetWord) {
@@ -1082,7 +1224,41 @@
     }
 
     // Show result modal
+    function renderStatsSummary() {
+      const playedEl = document.getElementById('statPlayed');
+      const winPctEl = document.getElementById('statWinPct');
+      const streakEl = document.getElementById('statStreak');
+      const maxStreakEl = document.getElementById('statMaxStreak');
+      if (!playedEl || !winPctEl || !streakEl || !maxStreakEl) return;
+
+      playedEl.textContent = state.stats.played;
+      winPctEl.textContent = state.stats.played > 0
+        ? Math.round((state.stats.won / state.stats.played) * 100)
+        : 0;
+      streakEl.textContent = state.stats.streak;
+      maxStreakEl.textContent = state.stats.maxStreak;
+    }
+
+    function applyRepairedStats(nextStats) {
+      if (!nextStats || typeof nextStats !== 'object') return;
+      state.stats = {
+        played: Number(nextStats.played) || 0,
+        won: Number(nextStats.won) || 0,
+        streak: Number(nextStats.streak) || 0,
+        maxStreak: Number(nextStats.maxStreak) || 0,
+      };
+      saveState();
+      renderStatsSummary();
+    }
+
+    window.Word5App = {
+      applyRepairedStats,
+    };
+
     function showResult() {
+      const resultDisplayCount = Number(localStorage.getItem('word5-result-display-count') || 0) + 1;
+      localStorage.setItem('word5-result-display-count', String(resultDisplayCount));
+
       if (state.won) {
         const messages = ['Genius!', 'Magnificent!', 'Impressive!', 'Splendid!', 'Great!', 'Phew!'];
         modalTitle.textContent = messages[state.guesses.length - 1] || 'You Won!';
@@ -1093,12 +1269,8 @@
       }
 
       modalWord.textContent = state.targetWord;
-      document.getElementById('statPlayed').textContent = state.stats.played;
-      document.getElementById('statWinPct').textContent = state.stats.played > 0
-        ? Math.round((state.stats.won / state.stats.played) * 100)
-        : 0;
-      document.getElementById('statStreak').textContent = state.stats.streak;
-      document.getElementById('statMaxStreak').textContent = state.stats.maxStreak;
+      renderStatsSummary();
+      completionDonate?.classList.toggle('visible', resultDisplayCount % 6 === 0);
 
       resultModal.classList.add('visible');
     }
@@ -1118,7 +1290,7 @@
         }).join('') + '\n';
       });
 
-      text += '\nhttps://word5.otherstuff.ai';
+      text += '\nhttps://otherstuff.ai/word5/';
 
       return text.trim();
     }
@@ -1202,53 +1374,69 @@
         // Sort by created_at descending (most recent first)
         events.sort((a, b) => b.created_at - a.created_at);
 
-        // Parse stats from all events, find highest values
+        // Parse stats from all events
         let nostrMaxStreak = 0;
         let nostrPlayed = 0;
         let nostrWon = 0;
-        let mostRecentStreak = 0;
+
+        // Walk events from most recent to oldest to find the best streak
+        // in the current unbroken win chain. This handles cache-clear scenarios
+        // where a recent post might have a low streak due to lost localStorage.
+        let bestChainStreak = 0;
         let mostRecentPuzzle = 0;
+        let chainBroken = false;
 
         for (const event of events) {
           const tags = Object.fromEntries(
-            event.tags.filter(t => ['streak', 'maxStreak', 'played', 'won', 'puzzle'].includes(t[0]))
-              .map(t => [t[0], parseInt(t[1], 10) || 0])
+            event.tags.filter(t => ['streak', 'maxStreak', 'played', 'won', 'puzzle', 'result'].includes(t[0]))
+              .map(t => [t[0], t[1]])
           );
 
-          // Track highest maxStreak across all posts
-          if (tags.maxStreak > nostrMaxStreak) nostrMaxStreak = tags.maxStreak;
-          if (tags.played > nostrPlayed) nostrPlayed = tags.played;
-          if (tags.won > nostrWon) nostrWon = tags.won;
+          // Track highest aggregate stats across ALL posts
+          const ms = parseInt(tags.maxStreak, 10) || 0;
+          const pl = parseInt(tags.played, 10) || 0;
+          const wo = parseInt(tags.won, 10) || 0;
+          if (ms > nostrMaxStreak) nostrMaxStreak = ms;
+          if (pl > nostrPlayed) nostrPlayed = pl;
+          if (wo > nostrWon) nostrWon = wo;
 
-          // For most recent post, get streak and puzzle number
+          // Get puzzle number from the most recent event
           if (event === events[0]) {
-            mostRecentStreak = tags.streak || 0;
-            // Try to parse puzzle number from content (e.g., "WORD5 #478")
             const puzzleMatch = event.content.match(/WORD5\s*#(\d+)/i);
-            if (puzzleMatch) {
-              mostRecentPuzzle = parseInt(puzzleMatch[1], 10);
+            mostRecentPuzzle = puzzleMatch
+              ? parseInt(puzzleMatch[1], 10)
+              : (parseInt(tags.puzzle, 10) || 0);
+          }
+
+          // For streak chain: stop at first loss, but keep scanning for aggregates
+          if (!chainBroken) {
+            if (tags.result === 'X') {
+              chainBroken = true;
             } else {
-              mostRecentPuzzle = tags.puzzle || 0;
+              const s = parseInt(tags.streak, 10) || 0;
+              if (s > bestChainStreak) bestChainStreak = s;
             }
           }
         }
 
-        // Determine if streak is still valid
-        // Current puzzle number
+        // Validate streak recency: most recent post must be today or yesterday
         const currentPuzzle = state.periodId % 1000;
+        const puzzleDiff = (currentPuzzle - mostRecentPuzzle + 1000) % 1000;
+        // Also check by timestamp as fallback (within ~48h)
+        const hoursSinceLastPost = (Date.now() / 1000 - events[0].created_at) / 3600;
+        const streakStillValid = puzzleDiff <= 1 || hoursSinceLastPost <= 48;
 
-        // Streak is valid if last post was for previous puzzle (or current)
-        const streakStillValid = (mostRecentPuzzle === currentPuzzle - 1) ||
-                                  (mostRecentPuzzle === currentPuzzle);
-
-        const validStreak = streakStillValid ? mostRecentStreak : 0;
+        const validStreak = streakStillValid ? bestChainStreak : 0;
 
         console.log('[Nostr Sync] Parsed from Nostr:', {
           posts: events.length,
           mostRecentPuzzle,
           currentPuzzle,
+          puzzleDiff,
+          hoursSinceLastPost: Math.round(hoursSinceLastPost),
           streakStillValid,
-          nostr: { streak: mostRecentStreak, maxStreak: nostrMaxStreak, played: nostrPlayed, won: nostrWon },
+          bestChainStreak,
+          nostr: { maxStreak: nostrMaxStreak, played: nostrPlayed, won: nostrWon },
           local: { streak: state.stats.streak, maxStreak: state.stats.maxStreak, played: state.stats.played, won: state.stats.won }
         });
 
@@ -1274,14 +1462,7 @@
 
         if (updated) {
           saveState();
-          // Update UI if stats are visible
-          document.getElementById('statStreak').textContent = state.stats.streak;
-          document.getElementById('statMaxStreak').textContent = state.stats.maxStreak;
-          document.getElementById('statPlayed').textContent = state.stats.played;
-          const winPct = state.stats.played > 0
-            ? Math.round((state.stats.won / state.stats.played) * 100)
-            : 0;
-          document.getElementById('statWinPct').textContent = winPct;
+          renderStatsSummary();
           console.log('[Nostr Sync] ✓ Stats updated from Nostr');
         } else {
           console.log('[Nostr Sync] No updates needed (local stats are current)');
@@ -1342,8 +1523,8 @@
         showToast(state.hardMode ? 'Hard mode ON' : 'Hard mode OFF');
       });
 
-      // Background sync stats from Nostr (don't await - runs silently)
-      syncStatsFromNostr();
+      // Background sync stats from Nostr (store promise so win handler can await it)
+      _nostrSyncPromise = syncStatsFromNostr();
 
       // If game was already over, show result
       if (state.gameOver) {
@@ -1374,9 +1555,62 @@
         }
       });
 
+      completionDonateBtn?.addEventListener('click', () => {
+        window.NostrUI?.openDonateModal?.();
+      });
+
       // Post to Nostr button
       const postNostrBtn = document.getElementById('postNostrBtn');
       const postStatus = document.getElementById('postStatus');
+
+      function publishKind5555InBackground({ signer, relays, periodNum }) {
+        // Best-effort shadow publish for external leaderboard consumers.
+        void (async () => {
+          try {
+            const { SimplePool } = await import('https://esm.sh/nostr-tools@2?bundle');
+            const bgPool = new SimplePool();
+            const result = state.won ? String(state.guesses.length) : 'X';
+            const payload = {
+              game: 'word5',
+              puzzle: periodNum,
+              result,
+              hardMode: Boolean(state.hardMode),
+              streak: state.stats.streak,
+              maxStreak: state.stats.maxStreak,
+              played: state.stats.played,
+              won: state.stats.won,
+              version: 1
+            };
+            const unsigned = {
+              kind: 5555,
+              created_at: Math.floor(Date.now() / 1000),
+              tags: [
+                ['t', 'word5'],
+                ['t', 'gaming'],
+                ['game', 'word5'],
+                ['difficulty', state.hardMode ? 'hard' : 'normal'],
+                ['result', result],
+                ['schema', 'word5.score.v1'],
+                ['source', 'https://otherstuff.ai/word5/'],
+                ['puzzle', String(periodNum)],
+                ['streak', String(state.stats.streak)],
+                ['maxStreak', String(state.stats.maxStreak)],
+                ['played', String(state.stats.played)],
+                ['won', String(state.stats.won)],
+                ['version', '1']
+              ],
+              content: JSON.stringify(payload)
+            };
+
+            const signed = await signer.signEvent(unsigned);
+            const pubPromises = bgPool.publish(relays, signed);
+            await Promise.allSettled(pubPromises);
+            try { bgPool.close(relays); } catch (_) {}
+          } catch (e) {
+            console.log('[Nostr 5555] Background publish skipped:', e?.message || e);
+          }
+        })();
+      }
 
       postNostrBtn.addEventListener('click', async () => {
         if (!window.NostrPost || !window.NostrSigners) {
@@ -1436,11 +1670,28 @@
 
           postStatus.textContent = `Posted via ${signer.mode}`;
           showToast('Posted to Nostr!');
+          publishKind5555InBackground({
+            signer,
+            relays,
+            periodNum
+          });
         } catch (e) {
           console.error('Nostr post failed:', e);
           postStatus.textContent = `Failed: ${e.message || e}`;
           showToast('Post failed');
         }
+      });
+
+      // Help modal
+      const helpModal = document.getElementById('helpModal');
+      document.getElementById('helpBtn').addEventListener('click', () => {
+        helpModal.classList.add('visible');
+      });
+      document.getElementById('helpModalClose').addEventListener('click', () => {
+        helpModal.classList.remove('visible');
+      });
+      helpModal.addEventListener('click', (e) => {
+        if (e.target === helpModal) helpModal.classList.remove('visible');
       });
 
       // Close modal on outside click
