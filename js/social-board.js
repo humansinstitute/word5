@@ -8,6 +8,7 @@ const RELAYS = [
 ];
 
 const COMPARE_WINDOW_DAYS = 21;
+const WORD5_ROTATION_HOURS = 24;
 const BLOSSOM_UPLOAD_SERVER = "https://blossom.primal.net";
 const SCORE_BY_RESULT = {
   "1": 10,
@@ -1423,6 +1424,39 @@ function getTagValue(event, tagName) {
   return tag ? parseInt(tag[1], 10) || 0 : 0;
 }
 
+function getTagText(event, tagName) {
+  const tag = event.tags.find((candidate) => candidate[0] === tagName);
+  return tag ? tag[1] || "" : "";
+}
+
+function isStatsCorrectionEvent(event) {
+  return (
+    getTagText(event, "schema") === "word5.stats.v1" ||
+    getTagText(event, "type") === "stats-correction"
+  );
+}
+
+function getWord5DisplayPuzzle(event) {
+  const taggedPuzzle = getTagValue(event, "puzzle");
+  if (taggedPuzzle > 0) return taggedPuzzle;
+  const secondsPerPeriod = WORD5_ROTATION_HOURS * 60 * 60;
+  return Math.floor(Number(event.created_at || 0) / secondsPerPeriod) % 1000;
+}
+
+function isPlausibleAfterCorrection(event, correction) {
+  if (!correction || isStatsCorrectionEvent(event)) return true;
+  if (event.created_at < correction.created_at) return false;
+
+  const correctionStreak = getTagValue(correction, "streak");
+  const eventStreak = getTagValue(event, "streak");
+  if (eventStreak <= 0) return true;
+
+  const correctionPuzzle = getWord5DisplayPuzzle(correction);
+  const eventPuzzle = getWord5DisplayPuzzle(event);
+  const puzzleDiff = (eventPuzzle - correctionPuzzle + 1000) % 1000;
+  return eventStreak <= correctionStreak + puzzleDiff + 1;
+}
+
 async function renderLeaderboardEntry(event, rank) {
   const identity = await getDisplayIdentity(event.pubkey);
 
@@ -1471,15 +1505,27 @@ async function subscribeToTop() {
 
   try {
     const events = await pool.querySync(RELAYS, {
-      kinds: [1],
+      kinds: [1, 5555],
       "#t": ["word5"],
-      limit: 200,
+      limit: 500,
     });
+
+    const latestCorrectionByUser = new Map();
+    for (const event of events) {
+      if (!isStatsCorrectionEvent(event)) continue;
+      const existing = latestCorrectionByUser.get(event.pubkey);
+      if (!existing || event.created_at > existing.created_at) {
+        latestCorrectionByUser.set(event.pubkey, event);
+      }
+    }
 
     const bestByUser = new Map();
     for (const event of events) {
       const maxStreak = getTagValue(event, "maxStreak");
       if (maxStreak <= 0) continue;
+
+      const correction = latestCorrectionByUser.get(event.pubkey);
+      if (!isPlausibleAfterCorrection(event, correction)) continue;
 
       const existing = bestByUser.get(event.pubkey);
       if (!existing || maxStreak > getTagValue(existing, "maxStreak")) {

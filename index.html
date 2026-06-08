@@ -1348,6 +1348,43 @@
         const pubkey = await signer.getPublicKey();
         console.log('[Nostr Sync] Got pubkey:', pubkey.slice(0, 12) + '...');
 
+        if (window.NostrUI?.reconstructWord5Stats) {
+          const report = await window.NostrUI.reconstructWord5Stats(pubkey);
+          if (!report.stats) {
+            console.log('[Nostr Sync] No reconstructable stats found');
+            return;
+          }
+
+          const nextStats = {
+            played: Math.max(state.stats.played, Number(report.stats.played) || 0),
+            won: Math.max(state.stats.won, Number(report.stats.won) || 0),
+            streak: Number(report.stats.streak) || 0,
+            maxStreak: report.meta?.hasCorrection
+              ? Number(report.stats.maxStreak) || 0
+              : Math.max(state.stats.maxStreak, Number(report.stats.maxStreak) || 0),
+          };
+          const updated =
+            nextStats.played !== state.stats.played ||
+            nextStats.won !== state.stats.won ||
+            nextStats.streak !== state.stats.streak ||
+            nextStats.maxStreak !== state.stats.maxStreak;
+
+          if (updated) {
+            state.stats = nextStats;
+            saveState();
+            renderStatsSummary();
+            console.log('[Nostr Sync] Stats updated from reconstructed Nostr history', {
+              totalEvents: report.meta.totalEvents,
+              uniqueGames: report.meta.uniqueGames,
+              hasCorrection: report.meta.hasCorrection,
+              stats: nextStats,
+            });
+          } else {
+            console.log('[Nostr Sync] No updates needed (local stats are current)');
+          }
+          return;
+        }
+
         const { SimplePool } = await import('https://esm.sh/nostr-tools@2?bundle');
         const pool = new SimplePool();
         const relays = window.NostrPost?.DEFAULT_RELAYS || [

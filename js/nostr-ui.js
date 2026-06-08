@@ -10,7 +10,7 @@
   const profileCache = new Map();
   const BLOSSOM_UPLOAD_SERVER = "https://blossom.primal.net";
   const WORD5_STORAGE_KEY = "words-game";
-  const WORD5_ROTATION_HOURS = 4;
+  const WORD5_ROTATION_HOURS = 24;
   const WORD5_STREAK_EXPIRY_HOURS = 48;
   const WORD5_REPAIR_LIMIT = 2000;
   const WORD5_REPAIR_SINCE = Math.floor(Date.UTC(2025, 11, 1, 0, 0, 0) / 1000);
@@ -156,21 +156,12 @@
     return Math.floor(Number(createdAt || 0) / secondsPerPeriod);
   }
 
-  function parseWord5ShareContent(content) {
-    if (typeof content !== "string" || !content) return {};
-    const match = content.match(/WORD5\s*#(\d+)\s+([1-6X])\/6/i);
-    if (!match) return {};
-    return {
-      puzzle: Number.parseInt(match[1], 10),
-      result: normalizeWord5Result(match[2]),
-    };
-  }
-
   function parseWord5PayloadContent(content) {
     if (typeof content !== "string" || !content) return {};
     try {
       const parsed = JSON.parse(content);
       if (!parsed || typeof parsed !== "object") return {};
+      if (parsed.game !== "word5") return {};
       return {
         puzzle: Number.parseInt(parsed.puzzle, 10),
         result: normalizeWord5Result(parsed.result),
@@ -180,18 +171,29 @@
     }
   }
 
+  function hasWord5MetadataTag(tags) {
+    return tags.some((tag) =>
+      Array.isArray(tag) &&
+      tag.length >= 2 &&
+      (
+        (tag[0] === "t" && String(tag[1] || "").toLowerCase() === "word5") ||
+        (tag[0] === "game" && tag[1] === "word5")
+      )
+    );
+  }
+
   function parseWord5Event(event) {
     if (!event || !Array.isArray(event.tags)) return null;
+    if (!hasWord5MetadataTag(event.tags)) return null;
 
     const tags = Object.fromEntries(
       event.tags
         .filter((tag) => Array.isArray(tag) && tag.length >= 2)
         .map((tag) => [tag[0], tag[1]])
     );
-    const shareData = parseWord5ShareContent(event.content);
     const payloadData = parseWord5PayloadContent(event.content);
-    const puzzle = Number.parseInt(tags.puzzle, 10) || shareData.puzzle || payloadData.puzzle || 0;
-    const result = normalizeWord5Result(tags.result) || shareData.result || payloadData.result;
+    const puzzle = Number.parseInt(tags.puzzle, 10) || payloadData.puzzle || 0;
+    const result = normalizeWord5Result(tags.result) || payloadData.result;
 
     if (!result || !Number.isFinite(event.created_at)) return null;
 
@@ -203,6 +205,31 @@
       puzzle,
       result,
       won: result !== "X",
+      streak: Number.parseInt(tags.streak, 10) || 0,
+      maxStreak: Number.parseInt(tags.maxStreak, 10) || 0,
+      played: Number.parseInt(tags.played, 10) || 0,
+      taggedWon: Number.parseInt(tags.won, 10) || 0,
+    };
+  }
+
+  function parseWord5StatsCorrection(event) {
+    if (!event || !Array.isArray(event.tags)) return null;
+    const tags = Object.fromEntries(
+      event.tags
+        .filter((tag) => Array.isArray(tag) && tag.length >= 2)
+        .map((tag) => [tag[0], tag[1]])
+    );
+    if (tags.schema !== "word5.stats.v1" && tags.type !== "stats-correction") {
+      return null;
+    }
+    return {
+      created_at: Number(event.created_at) || 0,
+      stats: {
+        played: Number.parseInt(tags.played, 10) || 0,
+        won: Number.parseInt(tags.won, 10) || 0,
+        streak: Number.parseInt(tags.streak, 10) || 0,
+        maxStreak: Number.parseInt(tags.maxStreak, 10) || 0,
+      },
     };
   }
 
@@ -219,9 +246,10 @@
     const byPeriod = new Map();
     for (const entry of entries) {
       if (!entry) continue;
-      const existing = byPeriod.get(entry.periodId);
+      const key = entry.puzzle || `period:${entry.periodId}`;
+      const existing = byPeriod.get(key);
       if (!existing) {
-        byPeriod.set(entry.periodId, entry);
+        byPeriod.set(key, entry);
         continue;
       }
       const existingScore = getWord5EventPreference(existing);
@@ -230,10 +258,19 @@
         nextScore > existingScore ||
         (nextScore === existingScore && entry.created_at > existing.created_at)
       ) {
-        byPeriod.set(entry.periodId, entry);
+        byPeriod.set(key, entry);
       }
     }
-    return Array.from(byPeriod.values()).sort((a, b) => a.created_at - b.created_at);
+    return Array.from(byPeriod.values()).sort((a, b) => {
+      const puzzleDiff = (a.puzzle || 0) - (b.puzzle || 0);
+      if (puzzleDiff !== 0) return puzzleDiff;
+      return a.created_at - b.created_at;
+    });
+  }
+
+  function isNextWord5Puzzle(prevPuzzle, nextPuzzle) {
+    if (!prevPuzzle || !nextPuzzle) return true;
+    return ((nextPuzzle - prevPuzzle + 1000) % 1000) === 1;
   }
 
   function buildWord5Stats(entries) {
@@ -241,19 +278,21 @@
 
     let totalWon = 0;
     let maxStreak = 0;
-    let trailingWinRun = 0;
     let activeRun = 0;
+    let previousPuzzle = 0;
 
     for (const entry of entries) {
+      const continuesStreak = isNextWord5Puzzle(previousPuzzle, entry.puzzle);
       if (entry.won) {
         totalWon += 1;
-        activeRun += 1;
+        activeRun = continuesStreak ? activeRun + 1 : 1;
         maxStreak = Math.max(maxStreak, activeRun);
       } else {
         activeRun = 0;
       }
+      previousPuzzle = entry.puzzle || previousPuzzle;
     }
-    trailingWinRun = activeRun;
+    const trailingWinRun = activeRun;
 
     const lastEntry = entries[entries.length - 1];
     const hoursSinceLastPost = lastEntry
@@ -275,6 +314,72 @@
         streakExpired,
         firstPlayedAt: entries[0]?.created_at || 0,
         lastPlayedAt: lastEntry?.created_at || 0,
+      },
+    };
+  }
+
+  function applyCorrectionBaseline(correction, entries) {
+    const correctedAt = Number(correction?.created_at) || 0;
+    const stats = {
+      played: Number(correction?.stats?.played) || 0,
+      won: Number(correction?.stats?.won) || 0,
+      streak: Number(correction?.stats?.streak) || 0,
+      maxStreak: Number(correction?.stats?.maxStreak) || 0,
+    };
+    let activeRun = stats.streak;
+    let previousPuzzle = 0;
+
+    for (const entry of entries) {
+      if (entry.created_at <= correctedAt) {
+        previousPuzzle = entry.puzzle || previousPuzzle;
+        continue;
+      }
+
+      stats.played += 1;
+      if (entry.won) {
+        stats.won += 1;
+        activeRun = isNextWord5Puzzle(previousPuzzle, entry.puzzle)
+          ? activeRun + 1
+          : 1;
+        stats.streak = activeRun;
+        stats.maxStreak = Math.max(stats.maxStreak, activeRun);
+      } else {
+        activeRun = 0;
+        stats.streak = 0;
+      }
+      previousPuzzle = entry.puzzle || previousPuzzle;
+    }
+
+    return stats;
+  }
+
+  function buildLatestTaggedStats(entries, fallbackStats) {
+    const latestTagged = entries
+      .filter((entry) =>
+        entry.streak > 0 ||
+        entry.maxStreak > 0 ||
+        entry.played > 0 ||
+        entry.taggedWon > 0
+      )
+      .slice()
+      .sort((a, b) => b.created_at - a.created_at)[0];
+    if (!latestTagged) return null;
+
+    const hoursSinceLastPost = (Date.now() / 1000 - latestTagged.created_at) / 3600;
+    const streakExpired = hoursSinceLastPost > WORD5_STREAK_EXPIRY_HOURS;
+    const streak = streakExpired ? 0 : latestTagged.streak;
+    return {
+      stats: {
+        played: latestTagged.played || Number(fallbackStats?.played) || 0,
+        won: latestTagged.taggedWon || Number(fallbackStats?.won) || 0,
+        streak,
+        maxStreak: latestTagged.maxStreak || Math.max(Number(fallbackStats?.maxStreak) || 0, streak),
+      },
+      meta: {
+        latestTaggedAt: latestTagged.created_at,
+        trailingWinRun: streak,
+        hoursSinceLastPost,
+        streakExpired,
       },
     };
   }
@@ -303,9 +408,14 @@
     const parsed = (events || []).map(parseWord5Event).filter(Boolean);
     const entries = dedupeWord5Entries(parsed);
     const summary = buildWord5Stats(entries);
+    const taggedStats = buildLatestTaggedStats(entries, summary?.stats);
+    const correction = (events || [])
+      .map(parseWord5StatsCorrection)
+      .filter(Boolean)
+      .sort((a, b) => b.created_at - a.created_at)[0] || null;
     if (!summary) {
       return {
-        stats: null,
+        stats: correction?.stats || null,
         entries: [],
         meta: {
           totalEvents: events?.length || 0,
@@ -315,17 +425,39 @@
           streakExpired: true,
           firstPlayedAt: 0,
           lastPlayedAt: 0,
+          hasCorrection: Boolean(correction),
         },
       };
     }
+    const correctedStats = correction
+      ? applyCorrectionBaseline(correction, entries)
+      : null;
     return {
-      stats: summary.stats,
+      stats: correctedStats || taggedStats?.stats || summary.stats,
       entries,
       meta: {
         ...summary.meta,
+        ...(taggedStats?.meta || {}),
         totalEvents: events?.length || 0,
+        hasCorrection: Boolean(correction),
+        usedTaggedStats: Boolean(!correctedStats && taggedStats),
       },
     };
+  }
+
+  function readPersistedWord5Stats() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(WORD5_STORAGE_KEY) || "{}") || {};
+      const stats = saved.stats || {};
+      return {
+        played: Number(stats.played) || 0,
+        won: Number(stats.won) || 0,
+        streak: Number(stats.streak) || 0,
+        maxStreak: Number(stats.maxStreak) || 0,
+      };
+    } catch (_) {
+      return { played: 0, won: 0, streak: 0, maxStreak: 0 };
+    }
   }
 
   function persistWord5Stats(stats) {
@@ -348,6 +480,55 @@
       maxStreak: Number(stats.maxStreak) || 0,
     };
     localStorage.setItem(WORD5_STORAGE_KEY, JSON.stringify(saved));
+  }
+
+  async function publishWord5StatsCorrection(stats) {
+    if (window.NostrSigners?.ready) {
+      await window.NostrSigners.ready();
+    }
+    if (!window.NostrSigners) {
+      throw new Error("Nostr signer not available");
+    }
+
+    const signer = await window.NostrSigners.getActiveSigner();
+    const { SimplePool } = await import("https://esm.sh/nostr-tools@2?bundle");
+    const pool = new SimplePool();
+    const relays = getRelayList();
+    const payload = {
+      game: "word5",
+      type: "stats-correction",
+      stats,
+      version: 1,
+    };
+    const unsigned = {
+      kind: 5555,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ["t", "word5"],
+        ["game", "word5"],
+        ["schema", "word5.stats.v1"],
+        ["type", "stats-correction"],
+        ["streak", String(stats.streak)],
+        ["maxStreak", String(stats.maxStreak)],
+        ["played", String(stats.played)],
+        ["won", String(stats.won)],
+        ["version", "1"],
+      ],
+      content: JSON.stringify(payload),
+    };
+
+    try {
+      const signed = await signer.signEvent(unsigned);
+      const results = await Promise.allSettled(pool.publish(relays, signed));
+      if (!results.some((result) => result.status === "fulfilled")) {
+        throw new Error("No relay confirmed the stats correction");
+      }
+      return signed;
+    } finally {
+      try {
+        pool.close(relays);
+      } catch (_) {}
+    }
   }
 
   function clearProfilePreviewUrl() {
@@ -571,6 +752,20 @@
           <div class="profile-actions" style="margin-top:10px;">
             <button id="profileRepairBtn" class="nostr-btn" type="button">Repair streak from Nostr</button>
           </div>
+          <div class="profile-modal-subtle" style="margin-top:12px;">Lower local stats and publish a signed correction for leaderboard readers.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+            <label>
+              <span class="profile-modal-subtle">Current</span>
+              <input id="profileCurrentStreakInput" class="nostr-input" type="number" min="0" step="1" inputmode="numeric">
+            </label>
+            <label>
+              <span class="profile-modal-subtle">Best</span>
+              <input id="profileBestStreakInput" class="nostr-input" type="number" min="0" step="1" inputmode="numeric">
+            </label>
+          </div>
+          <div class="profile-actions" style="margin-top:10px;">
+            <button id="profileApplyStatsBtn" class="nostr-btn" type="button">Apply stats correction</button>
+          </div>
           <div id="profileRepairStatus"></div>
         </div>
         <div style="border-top:1px solid #3a3a3c;margin-top:14px;padding-top:12px;">
@@ -696,6 +891,7 @@
     });
     $("profileSaveBtn")?.addEventListener("click", () => saveProfile());
     $("profileRepairBtn")?.addEventListener("click", () => repairWord5StatsFromProfile());
+    $("profileApplyStatsBtn")?.addEventListener("click", () => applyManualStatsCorrection());
 
     // Copy npub / nsec buttons in profile modal
     $("profileCopyNpub")?.addEventListener("click", async () => {
@@ -890,6 +1086,7 @@
       pubkeyLabel.textContent = fullNpub.length > 16 ? `${fullNpub.slice(0, 10)}…${fullNpub.slice(-6)}` : fullNpub;
       status.textContent = "Publishes a kind 0 profile for the active signer.";
       repairStatus.textContent = `Scans signed WORD5 posts since ${WORD5_REPAIR_SINCE_LABEL}.`;
+      refreshStatsCorrectionInputs();
 
       // Refresh session-only visibility for copy nsec button
       const player = window.NostrSession?.getPlayer();
@@ -1085,6 +1282,7 @@
       }
 
       persistWord5Stats(report.stats);
+      refreshStatsCorrectionInputs(report.stats);
       const expiryNote = report.meta.streakExpired && report.meta.trailingWinRun > 0
         ? ` Current streak expired after ${Math.round(report.meta.hoursSinceLastPost)}h without a post.`
         : "";
@@ -1097,6 +1295,48 @@
     } finally {
       repairBtn.disabled = false;
       repairBtn.textContent = "Repair streak from Nostr";
+    }
+  }
+
+  function refreshStatsCorrectionInputs(stats = readPersistedWord5Stats()) {
+    const currentInput = $("profileCurrentStreakInput");
+    const bestInput = $("profileBestStreakInput");
+    if (currentInput) currentInput.value = String(Number(stats.streak) || 0);
+    if (bestInput) bestInput.value = String(Number(stats.maxStreak) || 0);
+  }
+
+  async function applyManualStatsCorrection() {
+    const applyBtn = $("profileApplyStatsBtn");
+    const repairStatus = $("profileRepairStatus");
+    const currentInput = $("profileCurrentStreakInput");
+    const bestInput = $("profileBestStreakInput");
+    if (!applyBtn || !repairStatus || !currentInput || !bestInput) return;
+
+    const current = Math.max(0, Number.parseInt(currentInput.value, 10) || 0);
+    const best = Math.max(current, Number.parseInt(bestInput.value, 10) || 0);
+    const existing = readPersistedWord5Stats();
+    const nextStats = {
+      played: existing.played,
+      won: existing.won,
+      streak: current,
+      maxStreak: best,
+    };
+
+    applyBtn.disabled = true;
+    applyBtn.textContent = "Publishing...";
+    repairStatus.textContent = "Applying local stats and publishing correction...";
+
+    try {
+      persistWord5Stats(nextStats);
+      refreshStatsCorrectionInputs(nextStats);
+      await publishWord5StatsCorrection(nextStats);
+      repairStatus.textContent = `Stats corrected. Streak ${nextStats.streak}, best ${nextStats.maxStreak}.`;
+      showToast("Stats correction published");
+    } catch (e) {
+      repairStatus.textContent = e?.message || String(e);
+    } finally {
+      applyBtn.disabled = false;
+      applyBtn.textContent = "Apply stats correction";
     }
   }
 
