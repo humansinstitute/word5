@@ -482,7 +482,7 @@
     localStorage.setItem(WORD5_STORAGE_KEY, JSON.stringify(saved));
   }
 
-  async function publishWord5StatsCorrection(stats) {
+  async function publishWord5StatsCorrection(stats, previousStats = null) {
     if (window.NostrSigners?.ready) {
       await window.NostrSigners.ready();
     }
@@ -516,6 +516,12 @@
       ],
       content: JSON.stringify(payload),
     };
+    if (previousStats) {
+      unsigned.tags.push(
+        ["previousStreak", String(Number(previousStats.streak) || 0)],
+        ["previousMaxStreak", String(Number(previousStats.maxStreak) || 0)]
+      );
+    }
 
     try {
       const signed = await signer.signEvent(unsigned);
@@ -752,7 +758,7 @@
           <div class="profile-actions" style="margin-top:10px;">
             <button id="profileRepairBtn" class="nostr-btn" type="button">Repair streak from Nostr</button>
           </div>
-          <div class="profile-modal-subtle" style="margin-top:12px;">Lower local stats and publish a signed correction for leaderboard readers.</div>
+          <div class="profile-modal-subtle" style="margin-top:12px;">Lower this browser's local stats and publish that signed baseline for future WORD5 posts.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
             <label>
               <span class="profile-modal-subtle">Current</span>
@@ -1301,8 +1307,16 @@
   function refreshStatsCorrectionInputs(stats = readPersistedWord5Stats()) {
     const currentInput = $("profileCurrentStreakInput");
     const bestInput = $("profileBestStreakInput");
-    if (currentInput) currentInput.value = String(Number(stats.streak) || 0);
-    if (bestInput) bestInput.value = String(Number(stats.maxStreak) || 0);
+    const streak = Number(stats.streak) || 0;
+    const maxStreak = Number(stats.maxStreak) || 0;
+    if (currentInput) {
+      currentInput.value = String(streak);
+      currentInput.max = String(streak);
+    }
+    if (bestInput) {
+      bestInput.value = String(maxStreak);
+      bestInput.max = String(maxStreak);
+    }
   }
 
   async function applyManualStatsCorrection() {
@@ -1312,9 +1326,30 @@
     const bestInput = $("profileBestStreakInput");
     if (!applyBtn || !repairStatus || !currentInput || !bestInput) return;
 
-    const current = Math.max(0, Number.parseInt(currentInput.value, 10) || 0);
-    const best = Math.max(current, Number.parseInt(bestInput.value, 10) || 0);
     const existing = readPersistedWord5Stats();
+    const current = Math.max(0, Number.parseInt(currentInput.value, 10) || 0);
+    const best = Math.max(0, Number.parseInt(bestInput.value, 10) || 0);
+
+    if (current > existing.streak) {
+      repairStatus.textContent = `Current streak can only be lowered from ${existing.streak}.`;
+      refreshStatsCorrectionInputs(existing);
+      return;
+    }
+    if (best > existing.maxStreak) {
+      repairStatus.textContent = `Best streak can only be lowered from ${existing.maxStreak}.`;
+      refreshStatsCorrectionInputs(existing);
+      return;
+    }
+    if (best < current) {
+      repairStatus.textContent = "Best streak cannot be lower than current streak.";
+      refreshStatsCorrectionInputs(existing);
+      return;
+    }
+    if (current === existing.streak && best === existing.maxStreak) {
+      repairStatus.textContent = "Enter a lower current or best streak before publishing a correction.";
+      return;
+    }
+
     const nextStats = {
       played: existing.played,
       won: existing.won,
@@ -1329,7 +1364,7 @@
     try {
       persistWord5Stats(nextStats);
       refreshStatsCorrectionInputs(nextStats);
-      await publishWord5StatsCorrection(nextStats);
+      await publishWord5StatsCorrection(nextStats, existing);
       repairStatus.textContent = `Stats corrected. Streak ${nextStats.streak}, best ${nextStats.maxStreak}.`;
       showToast("Stats correction published");
     } catch (e) {
