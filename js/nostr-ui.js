@@ -314,6 +314,7 @@
         streakExpired,
         firstPlayedAt: entries[0]?.created_at || 0,
         lastPlayedAt: lastEntry?.created_at || 0,
+        lastPuzzle: lastEntry?.puzzle || 0,
       },
     };
   }
@@ -408,7 +409,6 @@
     const parsed = (events || []).map(parseWord5Event).filter(Boolean);
     const entries = dedupeWord5Entries(parsed);
     const summary = buildWord5Stats(entries);
-    const taggedStats = buildLatestTaggedStats(entries, summary?.stats);
     const correction = (events || [])
       .map(parseWord5StatsCorrection)
       .filter(Boolean)
@@ -425,6 +425,7 @@
           streakExpired: true,
           firstPlayedAt: 0,
           lastPlayedAt: 0,
+          lastPuzzle: 0,
           hasCorrection: Boolean(correction),
         },
       };
@@ -433,14 +434,13 @@
       ? applyCorrectionBaseline(correction, entries)
       : null;
     return {
-      stats: correctedStats || taggedStats?.stats || summary.stats,
+      stats: correctedStats || summary.stats,
       entries,
       meta: {
         ...summary.meta,
-        ...(taggedStats?.meta || {}),
         totalEvents: events?.length || 0,
         hasCorrection: Boolean(correction),
-        usedTaggedStats: Boolean(!correctedStats && taggedStats),
+        usedTaggedStats: false,
       },
     };
   }
@@ -1762,4 +1762,12 @@
     sha256Hex,
     openDonateModal,
   };
+  if (window.__WORD5_TEST__) {
+    window.NostrUI.__test = {
+      buildWord5Stats,
+      dedupeWord5Entries,
+      isNextWord5Puzzle,
+      parseWord5Event,
+    };
+  }
 })();

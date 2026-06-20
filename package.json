@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "npx -y http-server . -p ${PORT} -c-1 --cors"
+    "start": "npx -y http-server . -p ${PORT} -c-1 --cors",
+    "test": "node test/streak-reconstruction.test.js"
   }
 }

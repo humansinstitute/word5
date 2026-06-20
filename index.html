@@ -1355,10 +1355,18 @@
             return;
           }
 
+          const currentPuzzle = state.periodId % 1000;
+          const lastPuzzle = Number(report.meta?.lastPuzzle) || 0;
+          const puzzleDiff = lastPuzzle
+            ? (currentPuzzle - lastPuzzle + 1000) % 1000
+            : Number.POSITIVE_INFINITY;
+          const reconstructedStreak = puzzleDiff <= 1
+            ? Number(report.stats.streak) || 0
+            : 0;
           const nextStats = {
             played: Math.max(state.stats.played, Number(report.stats.played) || 0),
             won: Math.max(state.stats.won, Number(report.stats.won) || 0),
-            streak: Number(report.stats.streak) || 0,
+            streak: reconstructedStreak,
             maxStreak: report.meta?.hasCorrection
               ? Number(report.stats.maxStreak) || 0
               : Math.max(state.stats.maxStreak, Number(report.stats.maxStreak) || 0),
@@ -1376,6 +1384,8 @@
             console.log('[Nostr Sync] Stats updated from reconstructed Nostr history', {
               totalEvents: report.meta.totalEvents,
               uniqueGames: report.meta.uniqueGames,
+              lastPuzzle,
+              puzzleDiff,
               hasCorrection: report.meta.hasCorrection,
               stats: nextStats,
             });
@@ -1416,18 +1426,22 @@
         let nostrPlayed = 0;
         let nostrWon = 0;
 
-        // Walk events from most recent to oldest to find the best streak
-        // in the current unbroken win chain. This handles cache-clear scenarios
-        // where a recent post might have a low streak due to lost localStorage.
-        let bestChainStreak = 0;
+        // Walk events from most recent to oldest to rebuild the current win chain.
+        // A streak only continues when published puzzle numbers are sequential.
+        let currentChainStreak = 0;
         let mostRecentPuzzle = 0;
         let chainBroken = false;
+        let newerChainPuzzle = 0;
 
         for (const event of events) {
           const tags = Object.fromEntries(
             event.tags.filter(t => ['streak', 'maxStreak', 'played', 'won', 'puzzle', 'result'].includes(t[0]))
               .map(t => [t[0], t[1]])
           );
+          const puzzleMatch = event.content.match(/WORD5\s*#(\d+)/i);
+          const eventPuzzle = puzzleMatch
+            ? parseInt(puzzleMatch[1], 10)
+            : (parseInt(tags.puzzle, 10) || 0);
 
           // Track highest aggregate stats across ALL posts
           const ms = parseInt(tags.maxStreak, 10) || 0;
@@ -1439,31 +1453,33 @@
 
           // Get puzzle number from the most recent event
           if (event === events[0]) {
-            const puzzleMatch = event.content.match(/WORD5\s*#(\d+)/i);
-            mostRecentPuzzle = puzzleMatch
-              ? parseInt(puzzleMatch[1], 10)
-              : (parseInt(tags.puzzle, 10) || 0);
+            mostRecentPuzzle = eventPuzzle;
           }
 
-          // For streak chain: stop at first loss, but keep scanning for aggregates
+          // For streak chain: stop at first loss or skipped puzzle, but keep scanning for aggregates.
           if (!chainBroken) {
             if (tags.result === 'X') {
               chainBroken = true;
+            } else if (
+              newerChainPuzzle &&
+              eventPuzzle &&
+              ((newerChainPuzzle - eventPuzzle + 1000) % 1000) !== 1
+            ) {
+              chainBroken = true;
             } else {
-              const s = parseInt(tags.streak, 10) || 0;
-              if (s > bestChainStreak) bestChainStreak = s;
+              currentChainStreak += 1;
+              newerChainPuzzle = eventPuzzle || newerChainPuzzle;
             }
           }
         }
 
-        // Validate streak recency: most recent post must be today or yesterday
+        // Validate streak recency: most recent post must be the current or previous puzzle.
         const currentPuzzle = state.periodId % 1000;
         const puzzleDiff = (currentPuzzle - mostRecentPuzzle + 1000) % 1000;
-        // Also check by timestamp as fallback (within ~48h)
         const hoursSinceLastPost = (Date.now() / 1000 - events[0].created_at) / 3600;
-        const streakStillValid = puzzleDiff <= 1 || hoursSinceLastPost <= 48;
+        const streakStillValid = puzzleDiff <= 1;
 
-        const validStreak = streakStillValid ? bestChainStreak : 0;
+        const validStreak = streakStillValid ? currentChainStreak : 0;
 
         console.log('[Nostr Sync] Parsed from Nostr:', {
           posts: events.length,
@@ -1472,7 +1488,7 @@
           puzzleDiff,
           hoursSinceLastPost: Math.round(hoursSinceLastPost),
           streakStillValid,
-          bestChainStreak,
+          currentChainStreak,
           nostr: { maxStreak: nostrMaxStreak, played: nostrPlayed, won: nostrWon },
           local: { streak: state.stats.streak, maxStreak: state.stats.maxStreak, played: state.stats.played, won: state.stats.won }
         });
