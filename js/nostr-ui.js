@@ -460,10 +460,10 @@
     }
   }
 
-  function persistWord5Stats(stats) {
+  function persistWord5Stats(stats, meta = null) {
     if (!stats) return;
     if (window.Word5App?.applyRepairedStats) {
-      window.Word5App.applyRepairedStats(stats);
+      window.Word5App.applyRepairedStats(stats, meta);
       return;
     }
 
@@ -479,6 +479,9 @@
       streak: Number(stats.streak) || 0,
       maxStreak: Number(stats.maxStreak) || 0,
     };
+    if (meta && Number(meta.lastPuzzle)) {
+      saved.lastCompletedPuzzle = Number(meta.lastPuzzle) || 0;
+    }
     localStorage.setItem(WORD5_STORAGE_KEY, JSON.stringify(saved));
   }
 
@@ -1287,7 +1290,7 @@
         return;
       }
 
-      persistWord5Stats(report.stats);
+      persistWord5Stats(report.stats, report.meta);
       refreshStatsCorrectionInputs(report.stats);
       const expiryNote = report.meta.streakExpired && report.meta.trailingWinRun > 0
         ? ` Current streak expired after ${Math.round(report.meta.hoursSinceLastPost)}h without a post.`
@@ -1767,6 +1770,7 @@
       buildWord5Stats,
       dedupeWord5Entries,
       isNextWord5Puzzle,
+      applyCorrectionBaseline,
       parseWord5Event,
     };
   }

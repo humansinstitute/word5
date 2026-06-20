@@ -48,7 +48,7 @@ context.globalThis = context;
 vm.createContext(context);
 vm.runInContext(source, context, { filename: "js/nostr-ui.js" });
 
-const { buildWord5Stats, dedupeWord5Entries, isNextWord5Puzzle } =
+const { buildWord5Stats, dedupeWord5Entries, isNextWord5Puzzle, applyCorrectionBaseline } =
   context.window.NostrUI.__test;
 
 const now = Math.floor(Date.now() / 1000);
@@ -78,7 +78,10 @@ assert.equal(isNextWord5Puzzle(1423, 1425), false);
 }
 
 {
-  const report = buildWord5Stats([entry(1423, "4"), entry(1425, "3")]);
+  const report = buildWord5Stats([
+    { ...entry(1423, "4"), streak: 8, maxStreak: 8 },
+    { ...entry(1425, "3"), streak: 9, maxStreak: 9 },
+  ]);
   assert.equal(report.stats.streak, 1);
   assert.equal(report.stats.maxStreak, 1);
   assert.equal(report.meta.trailingWinRun, 1);
@@ -94,6 +97,23 @@ assert.equal(isNextWord5Puzzle(1423, 1425), false);
   assert.equal(report.stats.streak, 1);
   assert.equal(report.stats.maxStreak, 1);
   assert.equal(report.stats.won, 2);
+}
+
+{
+  const stats = applyCorrectionBaseline(
+    {
+      created_at: now - 985,
+      stats: { played: 10, won: 8, streak: 4, maxStreak: 6 },
+    },
+    [
+      entry(1423, "4", 10),
+      entry(1425, "3", 20),
+    ]
+  );
+  assert.equal(stats.played, 11);
+  assert.equal(stats.won, 9);
+  assert.equal(stats.streak, 1);
+  assert.equal(stats.maxStreak, 6);
 }
 
 {

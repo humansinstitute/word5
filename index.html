@@ -820,6 +820,7 @@
       gameOver: false,
       won: false,
       periodId: 0,
+      lastCompletedPuzzle: 0,
       hardMode: false,
       stats: {
         played: 0,
@@ -1204,17 +1205,13 @@
         if (guess === state.targetWord) {
           state.gameOver = true;
           state.won = true;
-          state.stats.played++;
-          state.stats.won++;
-          state.stats.streak++;
-          state.stats.maxStreak = Math.max(state.stats.streak, state.stats.maxStreak);
+          updateStatsForCompletedGame(true);
           saveState();
           setTimeout(() => showResult(), 500);
         } else if (state.guesses.length >= MAX_GUESSES) {
           state.gameOver = true;
           state.won = false;
-          state.stats.played++;
-          state.stats.streak = 0;
+          updateStatsForCompletedGame(false);
           saveState();
           setTimeout(() => showResult(), 500);
         } else {
@@ -1239,7 +1236,7 @@
       maxStreakEl.textContent = state.stats.maxStreak;
     }
 
-    function applyRepairedStats(nextStats) {
+    function applyRepairedStats(nextStats, meta = null) {
       if (!nextStats || typeof nextStats !== 'object') return;
       state.stats = {
         played: Number(nextStats.played) || 0,
@@ -1247,8 +1244,31 @@
         streak: Number(nextStats.streak) || 0,
         maxStreak: Number(nextStats.maxStreak) || 0,
       };
+      if (meta && Number(meta.lastPuzzle)) {
+        state.lastCompletedPuzzle = Number(meta.lastPuzzle) || 0;
+      }
       saveState();
       renderStatsSummary();
+    }
+
+    function isNextWord5Puzzle(prevPuzzle, nextPuzzle) {
+      if (!prevPuzzle || !nextPuzzle) return true;
+      return ((nextPuzzle - prevPuzzle + 1000) % 1000) === 1;
+    }
+
+    function updateStatsForCompletedGame(won) {
+      const completedPuzzle = state.periodId % 1000;
+      const continuesStreak = isNextWord5Puzzle(state.lastCompletedPuzzle, completedPuzzle);
+
+      state.stats.played++;
+      if (won) {
+        state.stats.won++;
+        state.stats.streak = continuesStreak ? state.stats.streak + 1 : 1;
+        state.stats.maxStreak = Math.max(state.stats.streak, state.stats.maxStreak);
+      } else {
+        state.stats.streak = 0;
+      }
+      state.lastCompletedPuzzle = completedPuzzle;
     }
 
     window.Word5App = {
@@ -1299,6 +1319,7 @@
     function saveState() {
       const saveData = {
         periodId: state.periodId,
+        lastCompletedPuzzle: state.lastCompletedPuzzle,
         guesses: state.guesses,
         gameOver: state.gameOver,
         won: state.won,
@@ -1315,6 +1336,10 @@
         try {
           const data = JSON.parse(saved);
           state.stats = data.stats || state.stats;
+          state.lastCompletedPuzzle = Number(data.lastCompletedPuzzle) || 0;
+          if (!state.lastCompletedPuzzle && data.gameOver && data.periodId) {
+            state.lastCompletedPuzzle = data.periodId % 1000;
+          }
           // Hard mode persists across sessions
           state.hardMode = data.hardMode || false;
 
@@ -1371,11 +1396,18 @@
               ? Number(report.stats.maxStreak) || 0
               : Math.max(state.stats.maxStreak, Number(report.stats.maxStreak) || 0),
           };
+          const lastCompletedPuzzleChanged = Boolean(
+            lastPuzzle && state.lastCompletedPuzzle !== lastPuzzle
+          );
+          if (lastPuzzle) {
+            state.lastCompletedPuzzle = lastPuzzle;
+          }
           const updated =
             nextStats.played !== state.stats.played ||
             nextStats.won !== state.stats.won ||
             nextStats.streak !== state.stats.streak ||
-            nextStats.maxStreak !== state.stats.maxStreak;
+            nextStats.maxStreak !== state.stats.maxStreak ||
+            lastCompletedPuzzleChanged;
 
           if (updated) {
             state.stats = nextStats;
@@ -1495,6 +1527,10 @@
 
         // Update local state if Nostr has higher values
         let updated = false;
+        if (mostRecentPuzzle && state.lastCompletedPuzzle !== mostRecentPuzzle) {
+          state.lastCompletedPuzzle = mostRecentPuzzle;
+          updated = true;
+        }
 
         if (nostrMaxStreak > state.stats.maxStreak) {
           state.stats.maxStreak = nostrMaxStreak;
