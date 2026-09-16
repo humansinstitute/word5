@@ -2,6 +2,7 @@
 .worktrees*
 apps/logs/
 node_modules/
+.env
 *.log
 data/
 *.sqlite
