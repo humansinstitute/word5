@@ -634,7 +634,7 @@
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
-        <div class="app-version">Version 20260704-2</div>
+        <div class="app-version">Version 20260916-1</div>
       </div>
     </div>
     <div class="title">WORD5<span id="hardModeIndicator" class="hard-mode-indicator" style="display:none;">*</span></div>
@@ -750,10 +750,10 @@
     </div>
   </div>
 
-  <script src="js/nostr-session.js?v=20260704-2"></script>
-  <script src="js/nostr-signers.js?v=20260704-2"></script>
-  <script src="js/nostr-post.js?v=20260704-2"></script>
-  <script src="js/nostr-ui.js?v=20260704-2"></script>
+  <script src="js/nostr-session.js?v=20260916-1"></script>
+  <script src="js/nostr-signers.js?v=20260916-1"></script>
+  <script src="js/nostr-post.js?v=20260916-1"></script>
+  <script src="js/nostr-ui.js?v=20260916-1"></script>
   <script>
     // Word lists - loaded from external files
     let ANSWERS = [];  // Daily word pool (curated list)
@@ -1684,6 +1684,57 @@
       // Post to Nostr button
       const postNostrBtn = document.getElementById('postNostrBtn');
       const postStatus = document.getElementById('postStatus');
+      const EXTERNAL_SIGN_TIMEOUT_MS = 7000;
+
+      function withTimeout(promise, ms, message) {
+        let timer = null;
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), ms);
+        });
+        return Promise.race([promise, timeout]).finally(() => {
+          if (timer) clearTimeout(timer);
+        });
+      }
+
+      function usesExternalSigner(player) {
+        return player?.auth_mode === 'nip07' || player?.auth_mode === 'bunker';
+      }
+
+      async function getScorePostSigner() {
+        const player = window.NostrSession?.getPlayer?.();
+        const isEmbedded = Boolean(window.NostrSigners?.isEmbeddedAppWindow?.());
+        if (
+          isEmbedded &&
+          usesExternalSigner(player) &&
+          window.NostrSigners?.hasSessionSigner?.()
+        ) {
+          postStatus.textContent = 'WM App window detected; using in-app signer...';
+          return window.NostrSigners.getSessionSigner();
+        }
+        return window.NostrSigners.getActiveSigner();
+      }
+
+      async function signScoreEvent(signer, unsigned) {
+        try {
+          const signed = signer.mode === 'session'
+            ? await signer.signEvent(unsigned)
+            : await withTimeout(
+                signer.signEvent(unsigned),
+                EXTERNAL_SIGN_TIMEOUT_MS,
+                'Signer window did not respond'
+              );
+          return { signed, signer };
+        } catch (e) {
+          if (signer.mode !== 'session' && window.NostrSigners?.hasSessionSigner?.()) {
+            console.warn('External signer unavailable; falling back to session signer:', e);
+            postStatus.textContent = 'External signer unavailable; using in-app signer...';
+            const fallbackSigner = await window.NostrSigners.getSessionSigner();
+            const signed = await fallbackSigner.signEvent(unsigned);
+            return { signed, signer: fallbackSigner };
+          }
+          throw e;
+        }
+      }
 
       function publishKind5555InBackground({ signer, relays, periodNum }) {
         // Best-effort shadow publish for external leaderboard consumers.
@@ -1747,7 +1798,7 @@
         postStatus.textContent = 'Posting...';
 
         try {
-          const signer = await window.NostrSigners.getActiveSigner();
+          let signer = await getScorePostSigner();
           const { SimplePool } = await import('https://esm.sh/nostr-tools@2?bundle');
           const pool = new SimplePool();
 
@@ -1780,7 +1831,9 @@
             content
           };
 
-          const signed = await signer.signEvent(unsigned);
+          const signResult = await signScoreEvent(signer, unsigned);
+          const signed = signResult.signed;
+          signer = signResult.signer;
           const pubPromises = pool.publish(relays, signed);
 
           // nostr-tools v2: publish() returns array of promises
