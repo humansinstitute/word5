@@ -8,12 +8,17 @@ const RELAYS = String(process.env.WORD5_RELAYS || "wss://relay.damus.io,wss://no
   .split(",")
   .map((relay) => relay.trim())
   .filter(Boolean);
+const GAMESTR_RELAYS = String(process.env.GAMESTR_RELAYS || "wss://main.relay.gamestr.io")
+  .split(",")
+  .map((relay) => relay.trim())
+  .filter(Boolean);
 
 const service = new Word5Service({
   rootDir: ROOT,
   dbPath: process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"),
   word5Nsec: process.env.WORD5_NSEC,
   relays: RELAYS,
+  gamestrRelays: GAMESTR_RELAYS,
 });
 
 const MIME_TYPES: Record<string, string> = {

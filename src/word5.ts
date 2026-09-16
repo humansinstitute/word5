@@ -56,9 +56,18 @@ export type SubmitResult = {
     points: number;
     hardMode: boolean;
   };
+  signedStats: SignedStats | null;
   attestation: Event | null;
   repost: Event | null;
+  gamestrScore: Event | null;
   relayResults: Array<{ relay: string; status: "ok" | "failed"; reason?: string }>;
+};
+
+type SignedStats = {
+  played: number;
+  won: number;
+  streak: number;
+  maxStreak: number;
 };
 
 type ParsedWord5Event = {
@@ -74,6 +83,7 @@ type ServerOptions = {
   dbPath?: string;
   word5Nsec?: string;
   relays?: string[];
+  gamestrRelays?: string[];
 };
 
 function hashDate(dateStr: string): number {
@@ -151,6 +161,16 @@ function parseEvent(event: Event): ParsedWord5Event | null {
   };
 }
 
+function parseSignedStats(event: Event): SignedStats | null {
+  const played = Number.parseInt(tagValue(event, "played") || "", 10);
+  const won = Number.parseInt(tagValue(event, "won") || "", 10);
+  const streak = Number.parseInt(tagValue(event, "streak") || "", 10);
+  const maxStreak = Number.parseInt(tagValue(event, "maxStreak") || "", 10);
+  const values = [played, won, streak, maxStreak];
+  if (values.some((value) => !Number.isFinite(value) || value < 0)) return null;
+  return { played, won, streak, maxStreak };
+}
+
 function eventIncludesSchema(event: Event): boolean {
   const schema = tagValue(event, "schema");
   return !schema || schema === "word5.score.v1";
@@ -224,6 +244,19 @@ function initDb(db: Database): void {
       published_at TEXT
     );
     CREATE TABLE IF NOT EXISTS reposts (
+      event_id TEXT PRIMARY KEY,
+      user_event_id TEXT NOT NULL UNIQUE REFERENCES raw_events(event_id),
+      event_json TEXT NOT NULL,
+      published_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS player_stats_snapshots (
+      event_id TEXT PRIMARY KEY REFERENCES raw_events(event_id),
+      pubkey TEXT NOT NULL,
+      period_id INTEGER NOT NULL,
+      stats_json TEXT NOT NULL,
+      accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS gamestr_scores (
       event_id TEXT PRIMARY KEY,
       user_event_id TEXT NOT NULL UNIQUE REFERENCES raw_events(event_id),
       event_json TEXT NOT NULL,
@@ -309,6 +342,60 @@ function buildRepost(event: Event, secretKey: Uint8Array): Event {
   );
 }
 
+function buildGamestrScore({
+  event,
+  parsed,
+  periodId,
+  date,
+  points,
+  signedStats,
+  secretKey,
+}: {
+  event: Event;
+  parsed: ParsedWord5Event;
+  periodId: number;
+  date: string;
+  points: number;
+  signedStats: SignedStats | null;
+  secretKey: Uint8Array;
+}): Event {
+  const word5Pubkey = getPublicKey(secretKey);
+  const tags = [
+    ["d", `word5:${event.pubkey}:${periodId}`],
+    ["game", "word5"],
+    ["score", String(points)],
+    ["p", event.pubkey],
+    ["state", "active"],
+    ["level", String(parsed.puzzle)],
+    ["mode", parsed.hardMode ? "hard" : "normal"],
+    ["difficulty", parsed.hardMode ? "hard" : "normal"],
+    ["result", parsed.result],
+    ["period", String(periodId)],
+    ["date", date],
+    ["source_event", event.id],
+    ["t", "puzzle"],
+    ["t", "word"],
+  ];
+  if (signedStats) {
+    tags.push(
+      ["played", String(signedStats.played)],
+      ["won", String(signedStats.won)],
+      ["streak", String(signedStats.streak)],
+      ["maxStreak", String(signedStats.maxStreak)],
+    );
+  }
+  return signEvent(
+    {
+      kind: 30762,
+      created_at: Math.floor(Date.now() / 1000),
+      pubkey: word5Pubkey,
+      tags,
+      content: `Word5 server-authoritative score: ${points} points for puzzle ${parsed.puzzle}`,
+    },
+    secretKey,
+  );
+}
+
 async function publishEvents(relays: string[], events: Event[]): Promise<Array<{ relay: string; status: "ok" | "failed"; reason?: string }>> {
   if (!relays.length || !events.length) return [];
   const pool = new SimplePool();
@@ -337,6 +424,7 @@ export class Word5Service {
   readonly db: Database;
   readonly answers: string[];
   readonly relays: string[];
+  readonly gamestrRelays: string[];
   readonly secretKey: Uint8Array | null;
 
   constructor(options: ServerOptions) {
@@ -346,6 +434,7 @@ export class Word5Service {
     this.db = new Database(dbPath);
     initDb(this.db);
     this.relays = options.relays || [];
+    this.gamestrRelays = options.gamestrRelays || ["wss://main.relay.gamestr.io"];
     this.secretKey = resolveSecretKey(options.word5Nsec);
   }
 
@@ -402,11 +491,18 @@ export class Word5Service {
   async submit(body: SubmitBody): Promise<SubmitResult> {
     const { event, parsed, periodId, date, guesses } = this.validateSubmission(body);
     const relayList = Array.from(new Set([...(body.relays || []), ...this.relays].filter((relay) => /^wss:\/\//.test(relay))));
+    const gamestrRelayList = Array.from(new Set([...this.gamestrRelays, ...relayList].filter((relay) => /^wss:\/\//.test(relay))));
+    const signedStats = parseSignedStats(event);
+    const statsForStorage = signedStats || body.game?.stats || null;
     const shouldRepost = body.repost !== false && parsed.result !== "X";
+    const points = SCORE_BY_RESULT[parsed.result];
     const attestation = this.secretKey
       ? buildAttestation({ event, parsed, periodId, date, secretKey: this.secretKey })
       : null;
     const repost = this.secretKey && shouldRepost ? buildRepost(event, this.secretKey) : null;
+    const gamestrScore = this.secretKey
+      ? buildGamestrScore({ event, parsed, periodId, date, points, signedStats, secretKey: this.secretKey })
+      : null;
 
     const insertRaw = this.db.query(`
       INSERT OR IGNORE INTO raw_events (event_id, pubkey, kind, created_at, event_json)
@@ -433,6 +529,14 @@ export class Word5Service {
       INSERT OR REPLACE INTO reposts (event_id, user_event_id, event_json)
       VALUES (?1, ?2, ?3)
     `);
+    const insertStatsSnapshot = this.db.query(`
+      INSERT OR REPLACE INTO player_stats_snapshots (event_id, pubkey, period_id, stats_json)
+      VALUES (?1, ?2, ?3, ?4)
+    `);
+    const insertGamestrScore = this.db.query(`
+      INSERT OR REPLACE INTO gamestr_scores (event_id, user_event_id, event_json)
+      VALUES (?1, ?2, ?3)
+    `);
 
     this.db.transaction(() => {
       insertRaw.run(event.id, event.pubkey, event.kind, event.created_at, JSON.stringify(event));
@@ -446,25 +550,34 @@ export class Word5Service {
         SCORE_BY_RESULT[parsed.result],
         parsed.hardMode ? 1 : 0,
         JSON.stringify(guesses),
-        body.game?.stats ? JSON.stringify(body.game.stats) : null,
+        statsForStorage ? JSON.stringify(statsForStorage) : null,
       );
       if (attestation) insertAttestation.run(attestation.id, event.id, JSON.stringify(attestation));
       if (repost) insertRepost.run(repost.id, event.id, JSON.stringify(repost));
+      if (signedStats) insertStatsSnapshot.run(event.id, event.pubkey, periodId, JSON.stringify(signedStats));
+      if (gamestrScore) insertGamestrScore.run(gamestrScore.id, event.id, JSON.stringify(gamestrScore));
     })();
 
-    const publishable = [attestation, repost].filter(Boolean) as Event[];
-    const relayResults = await publishEvents(relayList, publishable);
+    const word5Publishable = [attestation, repost].filter(Boolean) as Event[];
+    const gamestrPublishable = [gamestrScore].filter(Boolean) as Event[];
+    const word5RelayResults = await publishEvents(relayList, word5Publishable);
+    const gamestrRelayResults = await publishEvents(gamestrRelayList, gamestrPublishable);
+    const relayResults = [...word5RelayResults, ...gamestrRelayResults];
     if (relayResults.length) {
       const insertRelay = this.db.query(`
         INSERT INTO relay_publish_results (user_event_id, event_id, relay, status, reason)
         VALUES (?1, ?2, ?3, ?4, ?5)
       `);
       this.db.transaction(() => {
-        for (const eventToPublish of publishable) {
-          for (const result of relayResults) {
-            insertRelay.run(event.id, eventToPublish.id, result.relay, result.status, result.reason || null);
+        const insertBatch = (events: Event[], results: Array<{ relay: string; status: "ok" | "failed"; reason?: string }>) => {
+          for (const eventToPublish of events) {
+            for (const result of results) {
+              insertRelay.run(event.id, eventToPublish.id, result.relay, result.status, result.reason || null);
+            }
           }
-        }
+        };
+        insertBatch(word5Publishable, word5RelayResults);
+        insertBatch(gamestrPublishable, gamestrRelayResults);
       })();
     }
 
@@ -480,8 +593,10 @@ export class Word5Service {
         points: SCORE_BY_RESULT[parsed.result],
         hardMode: parsed.hardMode,
       },
+      signedStats,
       attestation,
       repost,
+      gamestrScore,
       relayResults,
     };
   }
