@@ -1,4 +1,9 @@
 .worktrees/
 .worktrees*
 apps/logs/
+node_modules/
 *.log
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

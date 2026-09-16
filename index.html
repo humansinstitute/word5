@@ -763,6 +763,32 @@
     const WORD_LENGTH = 5;
     const MAX_GUESSES = 6;
     const ROTATION_HOURS = 24;
+    const WORD5_SERVER_API = {
+      async submitScore({ event, periodNum, relays }) {
+        const body = {
+          event,
+          relays,
+          repost: true,
+          game: {
+            periodId: state.periodId,
+            guesses: state.guesses,
+            hardMode: Boolean(state.hardMode),
+            won: Boolean(state.won),
+            stats: state.stats
+          }
+        };
+        const response = await fetch('/api/submit', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || `Word5 server rejected score #${periodNum}`);
+        }
+        return payload;
+      }
+    };
 
     // Seeded random number generator (mulberry32)
     function seededRandom(seed) {
@@ -1733,7 +1759,10 @@
               ['t', 'wordle'],
               ['game', 'word5'],
               ['puzzle', String(periodNum)],
+              ['period', String(state.periodId)],
+              ['date', getDateForPeriod(state.periodId)],
               ['result', state.won ? String(state.guesses.length) : 'X'],
+              ['schema', 'word5.score.v1'],
               // Streak and stats for leaderboards
               ['streak', String(state.stats.streak)],
               ['maxStreak', String(state.stats.maxStreak)],
@@ -1766,6 +1795,19 @@
 
           postStatus.textContent = `Posted via ${signer.mode}`;
           showToast('Posted to Nostr!');
+          try {
+            const verified = await WORD5_SERVER_API.submitScore({
+              event: signed,
+              periodNum,
+              relays
+            });
+            if (verified.attestation) {
+              showToast('Verified by Word5!');
+            }
+          } catch (serverError) {
+            console.warn('Word5 server verification failed:', serverError);
+            showToast('Posted, server verification pending');
+          }
           publishKind5555InBackground({
             signer,
             relays,

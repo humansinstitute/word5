@@ -3,7 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "npx -y http-server . -p ${PORT} -c-1 --cors",
-    "test": "node test/streak-reconstruction.test.js"
+    "start": "bun run src/server.ts",
+    "test": "node test/streak-reconstruction.test.js && bun test"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.10.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.21"
   }
 }

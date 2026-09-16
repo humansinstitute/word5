@@ -13,9 +13,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# Build configs (not needed in container)
-captain-definition
-Dockerfile
-.dockerignore
-package.json
-bun.lockb
+# Runtime state
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

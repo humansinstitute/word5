@@ -1,18 +1,19 @@
-# Word5 - Static PWA deployment
-# No build step needed - vanilla JS with CDN imports
+FROM oven/bun:1.2-alpine
 
-FROM nginx:alpine
+WORKDIR /app
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY package.json bun.lock* ./
+RUN bun install --production --frozen-lockfile || bun install --production
 
-# Copy application files
-COPY index.html /usr/share/nginx/html/
-COPY social.html /usr/share/nginx/html/
-COPY manifest.webmanifest /usr/share/nginx/html/
-COPY js/ /usr/share/nginx/html/js/
-COPY assets/ /usr/share/nginx/html/assets/
+COPY index.html social.html manifest.webmanifest ./
+COPY js/ ./js/
+COPY assets/ ./assets/
+COPY src/ ./src/
+
+ENV PORT=80
+ENV WORD5_DB_PATH=/data/word5.sqlite
+RUN mkdir -p /data
 
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["bun", "run", "start"]
