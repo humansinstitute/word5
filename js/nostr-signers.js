@@ -61,35 +61,6 @@
     memoryBunkerUri = null;
   }
 
-  async function getSessionSigner(player = null) {
-    const activePlayer = player || (getPlayer ? getPlayer() : null);
-    if (activePlayer?.privkey) {
-      const { finalizeEvent } = await import(
-        "https://esm.sh/nostr-tools@2?bundle"
-      );
-      const sk = hexToBytes(activePlayer.privkey);
-      return {
-        getPublicKey: async () => activePlayer.pubkey,
-        signEvent: async (evt) => finalizeEvent(evt, sk),
-        mode: "session",
-      };
-    }
-    throw new Error("No session signer available");
-  }
-
-  function hasSessionSigner() {
-    const player = getPlayer ? getPlayer() : null;
-    return Boolean(player?.privkey && player?.pubkey);
-  }
-
-  function isEmbeddedAppWindow() {
-    try {
-      return window.self !== window.top;
-    } catch (_) {
-      return true;
-    }
-  }
-
   async function getActiveSigner() {
     if (!window.NostrSession) throw new Error("NostrSession unavailable");
     const player = getPlayer ? getPlayer() : null;
@@ -112,7 +83,17 @@
         mode: "bunker",
       };
     }
-    if (player?.privkey) return getSessionSigner(player);
+    if (player?.privkey) {
+      const { finalizeEvent } = await import(
+        "https://esm.sh/nostr-tools@2?bundle"
+      );
+      const sk = hexToBytes(player.privkey);
+      return {
+        getPublicKey: async () => player.pubkey,
+        signEvent: async (evt) => finalizeEvent(evt, sk),
+        mode: "session",
+      };
+    }
     throw new Error("No signer available");
   }
 
@@ -139,9 +120,6 @@
 
   window.NostrSigners = {
     getActiveSigner,
-    getSessionSigner,
-    hasSessionSigner,
-    isEmbeddedAppWindow,
     getDisplayNpub,
     ready,
     connectBunker: connectBunkerAndReturnIdentity,

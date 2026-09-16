@@ -529,6 +529,34 @@
     #postNostrBtn {
       background: #8b5cf6;
     }
+    #nostrPostConfirmModal {
+      z-index: 1350;
+    }
+    .nostr-post-preview {
+      margin: 12px 0 0;
+      padding: 12px;
+      max-height: min(220px, 34vh);
+      overflow: auto;
+      background: #121213;
+      border: 1px solid #3a3a3c;
+      border-radius: 6px;
+      color: #ffffff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.35;
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .nostr-post-copy {
+      margin-top: 12px;
+      color: #818384;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    #nostrPostCancelBtn {
+      background: #3a3a3c;
+    }
     .completion-donate {
       display: none;
       margin-top: 16px;
@@ -634,7 +662,7 @@
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
-        <div class="app-version">Version 20260916-1</div>
+        <div class="app-version">Version 20260916-2</div>
       </div>
     </div>
     <div class="title">WORD5<span id="hardModeIndicator" class="hard-mode-indicator" style="display:none;">*</span></div>
@@ -696,6 +724,18 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="nostrPostConfirmModal" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nostrPostConfirmTitle">
+      <h2 id="nostrPostConfirmTitle">Post to Nostr?</h2>
+      <div id="nostrPostPreview" class="nostr-post-preview"></div>
+      <p class="nostr-post-copy">Your active Nostr signer will be used after you confirm.</p>
+      <div class="modal-buttons">
+        <button id="nostrPostCancelBtn" type="button">Cancel</button>
+        <button id="nostrPostConfirmBtn" type="button">Post</button>
+      </div>
+    </div>
+  </div>
+
   <div id="streakModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:1300;padding:12px;">
     <div style="width:min(92vw,400px);background:#1a1a1b;border:1px solid #3a3a3c;color:#fff;border-radius:10px;padding:20px;box-shadow:0 12px 30px rgba(0,0,0,0.5);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
@@ -750,10 +790,10 @@
     </div>
   </div>
 
-  <script src="js/nostr-session.js?v=20260916-1"></script>
-  <script src="js/nostr-signers.js?v=20260916-1"></script>
-  <script src="js/nostr-post.js?v=20260916-1"></script>
-  <script src="js/nostr-ui.js?v=20260916-1"></script>
+  <script src="js/nostr-session.js?v=20260916-2"></script>
+  <script src="js/nostr-signers.js?v=20260916-2"></script>
+  <script src="js/nostr-post.js?v=20260916-2"></script>
+  <script src="js/nostr-ui.js?v=20260916-2"></script>
   <script>
     // Word lists - loaded from external files
     let ANSWERS = [];  // Daily word pool (curated list)
@@ -1684,56 +1724,49 @@
       // Post to Nostr button
       const postNostrBtn = document.getElementById('postNostrBtn');
       const postStatus = document.getElementById('postStatus');
-      const EXTERNAL_SIGN_TIMEOUT_MS = 7000;
+      const nostrPostConfirmModal = document.getElementById('nostrPostConfirmModal');
+      const nostrPostPreview = document.getElementById('nostrPostPreview');
+      const nostrPostCancelBtn = document.getElementById('nostrPostCancelBtn');
+      const nostrPostConfirmBtn = document.getElementById('nostrPostConfirmBtn');
 
-      function withTimeout(promise, ms, message) {
-        let timer = null;
-        const timeout = new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error(message)), ms);
-        });
-        return Promise.race([promise, timeout]).finally(() => {
-          if (timer) clearTimeout(timer);
-        });
-      }
-
-      function usesExternalSigner(player) {
-        return player?.auth_mode === 'nip07' || player?.auth_mode === 'bunker';
-      }
-
-      async function getScorePostSigner() {
-        const player = window.NostrSession?.getPlayer?.();
-        const isEmbedded = Boolean(window.NostrSigners?.isEmbeddedAppWindow?.());
-        if (
-          isEmbedded &&
-          usesExternalSigner(player) &&
-          window.NostrSigners?.hasSessionSigner?.()
-        ) {
-          postStatus.textContent = 'WM App window detected; using in-app signer...';
-          return window.NostrSigners.getSessionSigner();
+      function confirmNostrPost(content) {
+        if (!nostrPostConfirmModal || !nostrPostPreview || !nostrPostCancelBtn || !nostrPostConfirmBtn) {
+          return Promise.resolve(false);
         }
-        return window.NostrSigners.getActiveSigner();
-      }
 
-      async function signScoreEvent(signer, unsigned) {
-        try {
-          const signed = signer.mode === 'session'
-            ? await signer.signEvent(unsigned)
-            : await withTimeout(
-                signer.signEvent(unsigned),
-                EXTERNAL_SIGN_TIMEOUT_MS,
-                'Signer window did not respond'
-              );
-          return { signed, signer };
-        } catch (e) {
-          if (signer.mode !== 'session' && window.NostrSigners?.hasSessionSigner?.()) {
-            console.warn('External signer unavailable; falling back to session signer:', e);
-            postStatus.textContent = 'External signer unavailable; using in-app signer...';
-            const fallbackSigner = await window.NostrSigners.getSessionSigner();
-            const signed = await fallbackSigner.signEvent(unsigned);
-            return { signed, signer: fallbackSigner };
-          }
-          throw e;
-        }
+        nostrPostPreview.textContent = content;
+        nostrPostConfirmModal.classList.add('visible');
+        nostrPostConfirmModal.setAttribute('aria-hidden', 'false');
+        nostrPostConfirmBtn.focus();
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (confirmed) => {
+            if (settled) return;
+            settled = true;
+            nostrPostConfirmModal.classList.remove('visible');
+            nostrPostConfirmModal.setAttribute('aria-hidden', 'true');
+            nostrPostCancelBtn.removeEventListener('click', cancel);
+            nostrPostConfirmBtn.removeEventListener('click', confirm);
+            nostrPostConfirmModal.removeEventListener('click', onBackdrop);
+            document.removeEventListener('keydown', onKeydown);
+            postNostrBtn?.focus();
+            resolve(confirmed);
+          };
+          const cancel = () => finish(false);
+          const confirm = () => finish(true);
+          const onBackdrop = (e) => {
+            if (e.target === nostrPostConfirmModal) cancel();
+          };
+          const onKeydown = (e) => {
+            if (e.key === 'Escape') cancel();
+          };
+
+          nostrPostCancelBtn.addEventListener('click', cancel);
+          nostrPostConfirmBtn.addEventListener('click', confirm);
+          nostrPostConfirmModal.addEventListener('click', onBackdrop);
+          document.addEventListener('keydown', onKeydown);
+        });
       }
 
       function publishKind5555InBackground({ signer, relays, periodNum }) {
@@ -1793,12 +1826,12 @@
 
         const content = generateShareText();
 
-        if (!confirm(`Post this to Nostr?\n\n${content}`)) return;
+        if (!(await confirmNostrPost(content))) return;
 
         postStatus.textContent = 'Posting...';
 
         try {
-          let signer = await getScorePostSigner();
+          const signer = await window.NostrSigners.getActiveSigner();
           const { SimplePool } = await import('https://esm.sh/nostr-tools@2?bundle');
           const pool = new SimplePool();
 
@@ -1831,9 +1864,7 @@
             content
           };
 
-          const signResult = await signScoreEvent(signer, unsigned);
-          const signed = signResult.signed;
-          signer = signResult.signer;
+          const signed = await signer.signEvent(unsigned);
           const pubPromises = pool.publish(relays, signed);
 
           // nostr-tools v2: publish() returns array of promises
