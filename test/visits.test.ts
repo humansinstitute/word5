@@ -17,7 +17,7 @@ describe("game visits", () => {
     tracker.record("b".repeat(64), new Date("2026-09-29T23:59:45Z"));
 
     expect(tracker.yesterday(new Date("2026-09-30T00:00:00Z"))).toEqual({
-      puzzleDate: "2026-09-29", people: 2, timezone: "Australia/Perth",
+      periodId: 20725, gameNumber: 725, puzzleDate: "2026-09-29", people: 2, timezone: "UTC",
     });
     tracker.record(player, new Date("2026-09-30T00:01:00Z"));
     expect(tracker.yesterday(new Date("2026-09-30T00:01:00Z")).people).toBe(2);
@@ -44,7 +44,9 @@ describe("game visits", () => {
     const eventIds: string[] = [];
     const announcer = new VisitAnnouncer(db, new Uint8Array(32).fill(1), ["wss://example.com"], async (event) => {
       eventIds.push(event.id);
-      expect(event.content).toBe("2 people played Word5 yesterday!");
+      expect(event.content).toBe("Game 725 had 2 players!");
+      expect(event.tags).toContainEqual(["period", "20725"]);
+      expect(event.tags).toContainEqual(["puzzle", "725"]);
       return eventIds.length > 1;
     });
     const now = new Date("2026-09-30T00:01:00Z");
@@ -67,7 +69,7 @@ describe("game visits", () => {
     const events: string[] = [];
     const announcer = new VisitAnnouncer(db, new Uint8Array(32).fill(1), ["wss://example.com"], async (event) => {
       events.push(event.id);
-      expect(event.content).toContain("256 players for today's puzzle");
+      expect(event.content).toBe("Game 726 just reached 256 players!");
       return true;
     });
     expect(currentMilestone(255)).toBe(100);

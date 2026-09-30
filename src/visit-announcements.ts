@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { finalizeEvent, SimplePool, type Event } from "nostr-tools";
-import { getCurrentPeriodId, getDateForPeriod } from "./word5";
+import { getCurrentPeriodId, getDateForPeriod, getGameNumberForPeriod } from "./word5";
 
 export class VisitAnnouncer {
   private busy = false;
@@ -46,8 +46,8 @@ export class VisitAnnouncer {
       const event: Event = existing ? JSON.parse(existing.event_json) : finalizeEvent({
         kind: 1,
         created_at: Math.floor(now.getTime() / 1000),
-        tags: [["t", "word5"], ["game", "word5"], ["date", getDateForPeriod(periodId)]],
-        content: `${count.people.toLocaleString("en-US")} people played Word5 yesterday!${milestone ? ` 🎉 New daily milestone: ${milestone.toLocaleString("en-US")} players.` : ""}`,
+        tags: [["t", "word5"], ["game", "word5"], ["period", String(periodId)], ["puzzle", String(getGameNumberForPeriod(periodId))], ["date", getDateForPeriod(periodId)]],
+        content: `Game ${getGameNumberForPeriod(periodId)} had ${count.people.toLocaleString("en-US")} ${count.people === 1 ? "player" : "players"}!${milestone ? ` 🎉 New game milestone: ${milestone.toLocaleString("en-US")} players.` : ""}`,
       }, this.secretKey);
       if (!existing) this.db.query("INSERT INTO game_visit_announcements (period_id, event_json) VALUES (?, ?)")
         .run(periodId, JSON.stringify(event));
@@ -76,8 +76,8 @@ export class VisitAnnouncer {
       const event: Event = existing ? JSON.parse(existing.event_json) : finalizeEvent({
         kind: 1,
         created_at: Math.floor(now.getTime() / 1000),
-        tags: [["t", "word5"], ["game", "word5"], ["date", getDateForPeriod(periodId)]],
-        content: `Big day! Word5 just reached ${threshold.toLocaleString("en-US")} players for today's puzzle!`,
+        tags: [["t", "word5"], ["game", "word5"], ["period", String(periodId)], ["puzzle", String(getGameNumberForPeriod(periodId))], ["date", getDateForPeriod(periodId)]],
+        content: `Game ${getGameNumberForPeriod(periodId)} just reached ${threshold.toLocaleString("en-US")} players!`,
       }, this.secretKey);
       if (!existing) this.db.query("INSERT INTO game_visit_milestones (period_id, threshold, event_json) VALUES (?, ?, ?)")
         .run(periodId, threshold, JSON.stringify(event));

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { getCurrentPeriodId, getDateForPeriod } from "./word5";
+import { getCurrentPeriodId, getDateForPeriod, getGameNumberForPeriod } from "./word5";
 
 const perthClock = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Australia/Perth",
@@ -95,6 +95,12 @@ export class VisitTracker {
     const periodId = getCurrentPeriodId(now.getTime()) - 1;
     const row = this.db.query("SELECT COUNT(*) AS people FROM game_visitors WHERE period_id = ?")
       .get(periodId) as { people: number };
-    return { puzzleDate: getDateForPeriod(periodId), people: row.people, timezone: "Australia/Perth" };
+    return {
+      periodId,
+      gameNumber: getGameNumberForPeriod(periodId),
+      puzzleDate: getDateForPeriod(periodId),
+      people: row.people,
+      timezone: "UTC",
+    };
   }
 }

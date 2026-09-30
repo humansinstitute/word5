@@ -115,6 +115,10 @@ export function getDateForPeriod(periodId: number): string {
   return new Date(periodId * msPerPeriod).toISOString().split("T")[0]!;
 }
 
+export function getGameNumberForPeriod(periodId: number): number {
+  return periodId % 1000;
+}
+
 export function getWordForPeriod(answers: string[], periodId: number): string {
   if (!answers.length) throw new Error("answer list is empty");
   const dateStr = getDateForPeriod(periodId);
@@ -454,7 +458,7 @@ export class Word5Service {
   getDay(now = Date.now()) {
     const periodId = getCurrentPeriodId(now);
     const date = getDateForPeriod(periodId);
-    const puzzle = periodId % 1000;
+    const puzzle = getGameNumberForPeriod(periodId);
     const word = getWordForPeriod(this.answers, periodId);
     const wordHash = new Bun.CryptoHasher("sha256").update(`${date}:${word}`).digest("hex");
     return {

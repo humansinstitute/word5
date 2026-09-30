@@ -112,7 +112,7 @@ const server = Bun.serve({
         void announceLiveMilestone();
         return json(result);
       }
-      if (url.pathname === "/api/visits/yesterday" && req.method === "GET") {
+      if ((url.pathname === "/api/visits/last-completed-game" || url.pathname === "/api/visits/yesterday") && req.method === "GET") {
         return json(visits.yesterday());
       }
       if (url.pathname === "/api/completion" && req.method === "POST") {
