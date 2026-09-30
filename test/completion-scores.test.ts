@@ -80,6 +80,21 @@ describe("private completion scores", () => {
     expect(service.scores(1, false, 50, now).rows[0]?.points).toBe(7);
   });
 
+  test("a matching legacy row can be upgraded by a signed completion", () => {
+    const { service } = fixture();
+    const secret = player();
+    const event = completion(service, secret, period);
+    service.db.query(`INSERT INTO game_submissions
+      (event_id,pubkey,period_id,puzzle,puzzle_date,result,points,guesses_json)
+      VALUES ('old-post',?1,?2,?3,?4,'1',10,'[]')`)
+      .run(event.pubkey, period, period % 1000, getDateForPeriod(period));
+    const saved = service.complete(event, now);
+    expect(saved.submission.eventId).toBe(event.id);
+    expect(saved.submission.verifiedCompletion).toBe(1);
+    expect(service.scores(1, false, 50, now).rows).toHaveLength(1);
+    expect(service.complete(event, now).submission.eventId).toBe(event.id);
+  });
+
   test("a six-guess loss counts as a game worth zero points", () => {
     const { service } = fixture();
     const answer = getWordForPeriod(service.answers, period);

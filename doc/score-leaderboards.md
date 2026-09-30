@@ -8,7 +8,7 @@ The existing **Post to Nostr** button signs and publishes a separate public kind
 
 `GET /api/scores?days=1|7|21&published=true|false` ranks verified completion rows by puzzle period, counting the current UTC day and the preceding 0, 6, or 20 periods. It returns points, games, wins, and posted games per pubkey. Ties use wins, game count, then pubkey for a stable order. Top Scores in `social.html` uses this API. Duels and Top Streaks retain their relay data paths while the central score database accumulates coverage.
 
-Startup migration adds `verified_completion`, `published_at`, and `public_event_id` to existing `game_submissions` tables. Legacy rows remain intact with `verified_completion=0` and are excluded from Top Scores because earlier submissions did not bind guesses to the signature. There is no Nostr backfill. The legacy `/api/leaderboard` endpoint remains for compatibility and has different, unverified semantics. The old `/api/submit` HTTP route is retired.
+Startup migration adds `verified_completion`, `published_at`, and `public_event_id` to existing `game_submissions` tables. Legacy rows start with `verified_completion=0` and are excluded from Top Scores because earlier submissions did not bind guesses to the signature. A newly signed completion can upgrade a legacy row for the same player and period only when its validated result and hard mode match the old row; verified rows remain immutable. There is no Nostr backfill. The legacy `/api/leaderboard` endpoint remains for compatibility and has different, unverified semantics. The old `/api/submit` HTTP route is retired.
 
 ## Activation notes
 

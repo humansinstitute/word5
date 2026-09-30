@@ -510,6 +510,13 @@ export class Word5Service {
         (event_id,pubkey,period_id,puzzle,puzzle_date,result,points,hard_mode,guesses_json,verified_completion)
         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1)`)
         .run(event.id, event.pubkey, periodId, game.puzzle as number, game.date as string, result, points, game.hardMode ? 1 : 0, JSON.stringify(guesses));
+      // A pre-upgrade public post may already occupy today's row. Upgrade it only
+      // when the newly validated completion agrees with its recorded outcome.
+      this.db.query(`UPDATE game_submissions SET event_id=?1, points=?2, guesses_json=?3,
+        verified_completion=1, accepted_at=CURRENT_TIMESTAMP
+        WHERE pubkey=?4 AND period_id=?5 AND verified_completion=0
+        AND result=?6 AND hard_mode=?7`)
+        .run(event.id, points, JSON.stringify(guesses), event.pubkey, periodId, result, game.hardMode ? 1 : 0);
     })();
     const row = this.db.query(`SELECT event_id AS eventId, pubkey, period_id AS periodId, result, points,
       verified_completion AS verifiedCompletion, published_at AS publishedAt FROM game_submissions
