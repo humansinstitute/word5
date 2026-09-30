@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
+import { VisitAnnouncer } from "./visit-announcements";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const PORT = Number(process.env.PORT || 41005);
@@ -22,6 +23,17 @@ const service = new Word5Service({
   gamestrRelays: GAMESTR_RELAYS,
 });
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
+const visitAnnouncer = new VisitAnnouncer(service.db, service.secretKey, RELAYS);
+async function announceCompletedGame() {
+  try {
+    const result = await visitAnnouncer.announceYesterday();
+    if (result === "published") console.log("Published yesterday's Word5 player count");
+  } catch (error) {
+    console.error("Word5 visit announcement failed:", error instanceof Error ? error.message : String(error));
+  }
+}
+void announceCompletedGame();
+setInterval(announceCompletedGame, 5 * 60 * 1000);
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",

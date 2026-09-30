@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VisitTracker } from "../src/visits";
+import { VisitAnnouncer, milestoneCrossed } from "../src/visit-announcements";
 
 describe("game visits", () => {
   test("deduplicates by puzzle and records Perth visit hours across rollover", () => {
@@ -27,7 +28,33 @@ describe("game visits", () => {
     expect(visitors.every((row) => row.visitor_hash !== player)).toBe(true);
     const hours = db.query("SELECT DISTINCT perth_date, perth_hour FROM game_visit_events ORDER BY perth_date, perth_hour").all();
     expect(hours).toEqual([{ perth_date: "2026-09-30", perth_hour: 7 }, { perth_date: "2026-09-30", perth_hour: 8 }]);
+    const daily = db.query("SELECT perth_date, COUNT(*) AS people FROM game_day_visitors GROUP BY perth_date").all();
+    expect(daily).toEqual([{ perth_date: "2026-09-30", people: 2 }]);
     expect(() => tracker.record("invalid")).toThrow("Valid session public key required");
+    db.close();
+  });
+
+  test("retries one stable Nostr event and records a single completed puzzle announcement", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "word5-announcement-")), "visits.sqlite");
+    const db = new Database(path);
+    const tracker = new VisitTracker(db, path);
+    tracker.record("a".repeat(64), new Date("2026-09-29T23:59:00Z"));
+    tracker.record("a".repeat(64), new Date("2026-09-29T23:59:10Z"));
+    tracker.record("b".repeat(64), new Date("2026-09-29T23:59:20Z"));
+    const eventIds: string[] = [];
+    const announcer = new VisitAnnouncer(db, new Uint8Array(32).fill(1), ["wss://example.com"], async (event) => {
+      eventIds.push(event.id);
+      expect(event.content).toBe("2 people played Word5 yesterday!");
+      return eventIds.length > 1;
+    });
+    const now = new Date("2026-09-30T00:01:00Z");
+    expect(await announcer.announceYesterday(now)).toBe("retry");
+    expect(await announcer.announceYesterday(now)).toBe("published");
+    expect(await announcer.announceYesterday(now)).toBe("already-published");
+    expect(eventIds).toHaveLength(2);
+    expect(eventIds[0]).toBe(eventIds[1]);
+    expect(milestoneCrossed(512, 420)).toBe(500);
+    expect(milestoneCrossed(512, 600)).toBeNull();
     db.close();
   });
 });

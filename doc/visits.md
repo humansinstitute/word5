@@ -2,9 +2,11 @@
 
 Opening the game page records a visit. The browser sends its existing Nostr session public key to Word5's server; the server stores only an HMAC of that key and the current puzzle period. The HMAC key is a private file beside the SQLite database (`*.visitor-key`). Keep that file with the database across app restarts. No IP address, user agent, raw public key, or browser cookie is stored by this tracker.
 
-`game_visitors` has one row per session and puzzle. `game_visit_events` records game-page loads with a Perth calendar date and hour, so repeat visits and busy hours can be counted. Both tables use the puzzle-specific hash. A browser with a fresh session counts as a new visitor, so the number is an estimate of people. Social-page views do not count as play visits.
+`game_visitors` has one row per session and puzzle. `game_day_visitors` has one row per session and Perth calendar day. `game_visit_events` records game-page loads with a Perth calendar date and hour, so repeat visits and busy hours can be counted. The hashes are scoped to their puzzle or Perth day. A browser with a fresh session counts as a new visitor, so the number is an estimate of people. Social-page views do not count as play visits.
 
 The puzzle rolls over at 00:00 UTC (08:00 Australia/Perth). The Social headline reads the unique visitor count for the previous completed puzzle. The Perth date/hour fields let calendar-day reports follow Perth time even though the puzzle date follows the game rotation.
+
+If the existing Word5 account signer (`WORD5_NSEC`) and relays are configured, the server posts the previous completed puzzle's count as a Nostr note after rollover. The note mentions a new daily milestone when its count first crosses 100, 250, 500, 1,000, or later configured thresholds. It stores the signed event and publish result in `game_visit_announcements`, retries failed delivery every five minutes, and reuses the same event ID to prevent duplicate notes. Empty puzzles are not announced. This publishes only an aggregate count; no visitor identifier leaves the server.
 
 Example SQLite reports:
 
@@ -21,4 +23,10 @@ SELECT perth_date, perth_hour, COUNT(*) AS visits,
 FROM game_visit_events
 GROUP BY perth_date, perth_hour
 ORDER BY visits DESC;
+
+-- Unique sessions per Perth calendar day.
+SELECT perth_date, COUNT(*) AS people
+FROM game_day_visitors
+GROUP BY perth_date
+ORDER BY perth_date DESC;
 ```

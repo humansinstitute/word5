@@ -10,3 +10,4 @@ data/
 *.sqlite-wal
 *.visitor-key
 .mcp.json
+tmp/docs/handoffs/

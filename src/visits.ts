@@ -48,6 +48,12 @@ export class VisitTracker {
       );
       CREATE INDEX IF NOT EXISTS game_visit_events_period_hour
         ON game_visit_events(period_id, perth_date, perth_hour);
+      CREATE TABLE IF NOT EXISTS game_day_visitors (
+        perth_date TEXT NOT NULL,
+        visitor_hash TEXT NOT NULL,
+        first_seen_utc TEXT NOT NULL,
+        PRIMARY KEY (perth_date, visitor_hash)
+      );
     `);
   }
 
@@ -60,6 +66,8 @@ export class VisitTracker {
       .update(`${periodId}:${sessionPubkey.toLowerCase()}`).digest("hex");
     const puzzleDate = getDateForPeriod(periodId);
     const perth = perthParts(now);
+    const dayHash = createHmac("sha256", this.key)
+      .update(`day:${perth.date}:${sessionPubkey.toLowerCase()}`).digest("hex");
     const timestamp = now.toISOString();
     this.db.transaction(() => {
       this.db.query(`
@@ -75,6 +83,10 @@ export class VisitTracker {
         INSERT INTO game_visit_events (period_id, visitor_hash, perth_date, perth_hour, visited_at_utc)
         VALUES (?, ?, ?, ?, ?)
       `).run(periodId, visitorHash, perth.date, perth.hour, timestamp);
+      this.db.query(`
+        INSERT OR IGNORE INTO game_day_visitors (perth_date, visitor_hash, first_seen_utc)
+        VALUES (?, ?, ?)
+      `).run(perth.date, dayHash, timestamp);
     })();
     return { ok: true, puzzleDate };
   }
