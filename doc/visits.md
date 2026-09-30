@@ -6,7 +6,7 @@ Opening the game page records a visit. The browser sends its existing Nostr sess
 
 The puzzle rolls over at 00:00 UTC (08:00 Australia/Perth). The Social headline reads the unique visitor count for the previous completed puzzle. The Perth date/hour fields let calendar-day reports follow Perth time even though the puzzle date follows the game rotation.
 
-If the existing Word5 account signer (`WORD5_NSEC`) and relays are configured, the server posts the previous completed puzzle's count as a Nostr note after rollover. The note mentions a new daily milestone when its count first crosses 100, 250, 500, 1,000, or later configured thresholds. It stores the signed event and publish result in `game_visit_announcements`, retries failed delivery every five minutes, and reuses the same event ID to prevent duplicate notes. Empty puzzles are not announced. This publishes only an aggregate count; no visitor identifier leaves the server.
+If the existing Word5 account signer (`WORD5_NSEC`) and relays are configured, the server posts the previous completed puzzle's count as a Nostr note after rollover. It also posts when the current puzzle first reaches 100, 256, 512, 1,000, or later configured player thresholds. Signed events and publish results are stored in `game_visit_announcements` and `game_visit_milestones`; failed delivery is retried every five minutes with the same event ID. Empty puzzles are not announced. These posts contain only aggregate counts; no visitor identifier leaves the server.
 
 Example SQLite reports:
 

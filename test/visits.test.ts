@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VisitTracker } from "../src/visits";
-import { VisitAnnouncer, milestoneCrossed } from "../src/visit-announcements";
+import { VisitAnnouncer, currentMilestone, milestoneCrossed } from "../src/visit-announcements";
 
 describe("game visits", () => {
   test("deduplicates by puzzle and records Perth visit hours across rollover", () => {
@@ -53,8 +53,27 @@ describe("game visits", () => {
     expect(await announcer.announceYesterday(now)).toBe("already-published");
     expect(eventIds).toHaveLength(2);
     expect(eventIds[0]).toBe(eventIds[1]);
-    expect(milestoneCrossed(512, 420)).toBe(500);
+    expect(milestoneCrossed(512, 200)).toBe(512);
     expect(milestoneCrossed(512, 600)).toBeNull();
+    db.close();
+  });
+
+  test("publishes a current puzzle milestone once at 256 visitors", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "word5-milestone-")), "visits.sqlite");
+    const db = new Database(path);
+    const tracker = new VisitTracker(db, path);
+    const now = new Date("2026-09-30T12:00:00Z");
+    for (let i = 0; i < 256; i++) tracker.record(i.toString(16).padStart(64, "0"), now);
+    const events: string[] = [];
+    const announcer = new VisitAnnouncer(db, new Uint8Array(32).fill(1), ["wss://example.com"], async (event) => {
+      events.push(event.id);
+      expect(event.content).toContain("256 players for today's puzzle");
+      return true;
+    });
+    expect(currentMilestone(255)).toBe(100);
+    expect(await announcer.announceCurrentMilestone(now)).toBe("published");
+    expect(await announcer.announceCurrentMilestone(now)).toBe("already-published");
+    expect(events).toHaveLength(1);
     db.close();
   });
 });

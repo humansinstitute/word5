@@ -32,8 +32,18 @@ async function announceCompletedGame() {
     console.error("Word5 visit announcement failed:", error instanceof Error ? error.message : String(error));
   }
 }
+async function announceLiveMilestone() {
+  try {
+    const result = await visitAnnouncer.announceCurrentMilestone();
+    if (result === "published") console.log("Published a Word5 daily player milestone");
+  } catch (error) {
+    console.error("Word5 milestone announcement failed:", error instanceof Error ? error.message : String(error));
+  }
+}
 void announceCompletedGame();
+void announceLiveMilestone();
 setInterval(announceCompletedGame, 5 * 60 * 1000);
+setInterval(announceLiveMilestone, 5 * 60 * 1000);
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -98,7 +108,9 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/visit" && req.method === "POST") {
         const body = await readJson(req);
-        return json(visits.record(body?.sessionPubkey));
+        const result = visits.record(body?.sessionPubkey);
+        void announceLiveMilestone();
+        return json(result);
       }
       if (url.pathname === "/api/visits/yesterday" && req.method === "GET") {
         return json(visits.yesterday());
