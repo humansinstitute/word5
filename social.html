@@ -195,6 +195,7 @@
       display: flex;
       gap: 0;
       border-bottom: 1px solid #3a3a3c;
+      overflow-x: auto;
     }
     .yesterday-count {
       width: 100%;
@@ -206,8 +207,9 @@
       border-bottom: 1px solid #3a3a3c;
     }
     .tab {
-      flex: 1;
-      padding: 14px 16px;
+      flex: 1 0 auto;
+      padding: 14px 10px;
+      white-space: nowrap;
       background: transparent;
       border: none;
       color: #818384;
@@ -690,6 +692,8 @@
       gap: 0;
       padding: 10px 16px;
       border-bottom: 1px solid #2a2a2b;
+      flex-wrap: wrap;
+      row-gap: 8px;
     }
     .social-sub-btn {
       background: transparent;
@@ -908,6 +912,7 @@
     <button class="tab active" data-tab="social">Social</button>
     <button class="tab" data-tab="follows">Duels</button>
     <button class="tab" data-tab="top">Top Streaks</button>
+    <button class="tab" data-tab="scores">Top Scores</button>
     <button class="tab" data-tab="league">League</button>
   </div>
 
@@ -987,6 +992,6 @@
   <script src="js/nostr-ui.js?v=20260916-2"></script>
   <script src="js/cache.js?v=20260916-2"></script>
   <script src="js/league.js?v=20260916-2"></script>
-  <script src="js/social-board.js?v=20260916-2" type="module"></script>
+  <script src="js/social-board.js?v=20260930-scores" type="module"></script>
 </body>
 </html>

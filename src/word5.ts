@@ -10,7 +10,7 @@ import {
   type Event,
   type UnsignedEvent,
 } from "nostr-tools";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const WORD_LENGTH = 5;
@@ -272,6 +272,16 @@ function initDb(db: Database): void {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  const columns = db.query("PRAGMA table_info(game_submissions)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "published_at")) {
+    db.exec("ALTER TABLE game_submissions ADD COLUMN published_at TEXT");
+  }
+  if (!columns.some((column) => column.name === "verified_completion")) {
+    db.exec("ALTER TABLE game_submissions ADD COLUMN verified_completion INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.some((column) => column.name === "public_event_id")) {
+    db.exec("ALTER TABLE game_submissions ADD COLUMN public_event_id TEXT");
+  }
 }
 
 function signEvent(unsigned: UnsignedEvent, secretKey: Uint8Array): Event {
@@ -426,9 +436,12 @@ export class Word5Service {
   readonly relays: string[];
   readonly gamestrRelays: string[];
   readonly secretKey: Uint8Array | null;
+  readonly validWords: Set<string>;
 
   constructor(options: ServerOptions) {
     this.answers = loadAnswers(options.rootDir);
+    const wordsPath = join(options.rootDir, "assets", "wla.txt");
+    this.validWords = new Set([...this.answers, ...(existsSync(wordsPath) ? readFileSync(wordsPath, "utf8").split(/\r?\n/).map((word) => word.trim().toUpperCase()) : [])]);
     const dbPath = options.dbPath || join(options.rootDir, "data", "word5.sqlite");
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
@@ -451,6 +464,126 @@ export class Word5Service {
       wordHash,
       attestationEnabled: Boolean(this.secretKey),
     };
+  }
+
+  // This event is signed for identity and integrity, then sent only to this server.
+  // Its answer-revealing guesses must never be published to a Nostr relay.
+  complete(event: Event, now = Date.now()) {
+    if (!event || !validateEvent(event) || !verifyEvent(event) || getEventHash(event) !== event.id) {
+      throw new Error("Invalid signed completion event");
+    }
+    if (event.kind !== 30078 || tagValue(event, "schema") !== "word5.completion.v1") {
+      throw new Error("Expected a private Word5 completion event");
+    }
+    let game: Record<string, unknown>;
+    try { game = JSON.parse(event.content); } catch { throw new Error("Malformed completion payload"); }
+    if (!game || typeof game !== "object" || Array.isArray(game) ||
+        Object.keys(game).sort().join(",") !== "date,game,guesses,hardMode,periodId,puzzle,result" ||
+        game.game !== "word5" || typeof game.hardMode !== "boolean") {
+      throw new Error("Malformed completion payload");
+    }
+    const periodId = game.periodId as number;
+    const current = getCurrentPeriodId(now);
+    const eventPeriod = getCurrentPeriodId(event.created_at * 1000);
+    const gracePrevious = periodId === current - 1 && now - current * 86_400_000 <= 120_000;
+    if (!Number.isSafeInteger(periodId) || periodId !== eventPeriod ||
+        (periodId !== current && !gracePrevious) || event.created_at * 1000 > now + 30_000) {
+      throw new Error("Completion is outside the current puzzle period");
+    }
+    if (game.puzzle !== periodId % 1000 || game.date !== getDateForPeriod(periodId)) {
+      throw new Error("Puzzle period mismatch");
+    }
+    if (!Array.isArray(game.guesses) || game.guesses.length < 1 || game.guesses.length > MAX_GUESSES ||
+        game.guesses.some((guess) => typeof guess !== "string" || !/^[A-Z]{5}$/.test(guess) || !this.validWords.has(guess))) {
+      throw new Error("Missing or invalid ordered guesses");
+    }
+    const target = getWordForPeriod(this.answers, periodId);
+    const guesses = game.guesses as string[];
+    if (guesses.slice(0, -1).includes(target)) throw new Error("Guesses continue after the answer");
+    const result = guesses.at(-1) === target ? String(guesses.length) : guesses.length === MAX_GUESSES ? "X" : null;
+    if (!result || game.result !== result) throw new Error("Completion result mismatch");
+    const points = SCORE_BY_RESULT[result]!;
+    this.db.transaction(() => {
+      this.db.query(`INSERT OR IGNORE INTO raw_events (event_id,pubkey,kind,created_at,event_json) VALUES (?1,?2,?3,?4,?5)`)
+        .run(event.id, event.pubkey, event.kind, event.created_at, JSON.stringify(event));
+      this.db.query(`INSERT OR IGNORE INTO game_submissions
+        (event_id,pubkey,period_id,puzzle,puzzle_date,result,points,hard_mode,guesses_json,verified_completion)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1)`)
+        .run(event.id, event.pubkey, periodId, game.puzzle as number, game.date as string, result, points, game.hardMode ? 1 : 0, JSON.stringify(guesses));
+    })();
+    const row = this.db.query(`SELECT event_id AS eventId, pubkey, period_id AS periodId, result, points,
+      verified_completion AS verifiedCompletion, published_at AS publishedAt FROM game_submissions
+      WHERE pubkey=?1 AND period_id=?2`).get(event.pubkey, periodId) as Record<string, unknown>;
+    if (row.eventId !== event.id) throw new Error("Score already submitted for this player and period");
+    return { ok: true, submission: row };
+  }
+
+  async markPublished(event: Event, publish = publishEvents) {
+    if (!event || !validateEvent(event) || !verifyEvent(event) || getEventHash(event) !== event.id || event.kind !== 1) {
+      throw new Error("Invalid signed public Word5 post");
+    }
+    const parsed = parseEvent(event);
+    const periodText = tagValue(event, "period");
+    if (!parsed || !periodText || !/^\d+$/.test(periodText)) throw new Error("Missing public score period");
+    const periodId = Number(periodText);
+    const row = this.db.query(`SELECT event_id AS eventId, result, hard_mode AS hardMode, published_at AS publishedAt
+      FROM game_submissions WHERE pubkey=?1 AND period_id=?2 AND verified_completion=1`)
+      .get(event.pubkey, periodId) as { eventId: string; result: string; hardMode: number; publishedAt: string | null } | null;
+    if (!row || tagValue(event, "schema") !== "word5.score.v1" || parsed.puzzle !== periodId % 1000 ||
+        parsed.date !== getDateForPeriod(periodId) || parsed.result !== row.result || parsed.hardMode !== Boolean(row.hardMode)) {
+      throw new Error("Public post does not match a completed score");
+    }
+    if (row.publishedAt) return { ok: true, published: true, eventId: event.id };
+    if (!this.relays.length) throw new Error("No score publication relays configured");
+    const results = await publish(this.relays, [event]);
+    if (!results.some((result) => result.status === "ok" || /duplicate|already exists/i.test(result.reason || ""))) {
+      throw new Error("No relay confirmed the public post");
+    }
+    const update = this.db.query(`UPDATE game_submissions SET published_at=CURRENT_TIMESTAMP, public_event_id=?1
+      WHERE pubkey=?2 AND period_id=?3 AND verified_completion=1 AND published_at IS NULL`)
+      .run(event.id, event.pubkey, periodId);
+    if (update.changes === 0) return { ok: true, published: true, eventId: event.id };
+    // Only a confirmed public post may trigger server-signed relay side effects.
+    let attestation: Event | null = null;
+    if (this.secretKey) {
+      const date = getDateForPeriod(periodId);
+      const signedStats = parseSignedStats(event);
+      attestation = buildAttestation({ event, parsed, periodId, date, secretKey: this.secretKey });
+      const repost = parsed.result !== "X" ? buildRepost(event, this.secretKey) : null;
+      const gamestr = buildGamestrScore({ event, parsed, periodId, date,
+        points: SCORE_BY_RESULT[parsed.result]!, signedStats, secretKey: this.secretKey });
+      this.db.transaction(() => {
+        this.db.query(`INSERT OR IGNORE INTO raw_events (event_id,pubkey,kind,created_at,event_json) VALUES (?1,?2,?3,?4,?5)`)
+          .run(event.id, event.pubkey, event.kind, event.created_at, JSON.stringify(event));
+        this.db.query(`INSERT OR IGNORE INTO word5_attestations (event_id,user_event_id,event_json) VALUES (?1,?2,?3)`)
+          .run(attestation!.id, event.id, JSON.stringify(attestation));
+        if (repost) this.db.query(`INSERT OR IGNORE INTO reposts (event_id,user_event_id,event_json) VALUES (?1,?2,?3)`)
+          .run(repost.id, event.id, JSON.stringify(repost));
+        this.db.query(`INSERT OR IGNORE INTO gamestr_scores (event_id,user_event_id,event_json) VALUES (?1,?2,?3)`)
+          .run(gamestr.id, event.id, JSON.stringify(gamestr));
+        if (signedStats) this.db.query(`INSERT OR IGNORE INTO player_stats_snapshots (event_id,pubkey,period_id,stats_json) VALUES (?1,?2,?3,?4)`)
+          .run(event.id, event.pubkey, periodId, JSON.stringify(signedStats));
+      })();
+      try {
+        await publish(this.relays, [attestation, ...(repost ? [repost] : [])]);
+        await publish(this.gamestrRelays, [gamestr]);
+      } catch (error) {
+        console.warn("Word5 public score relay side effect failed:", error);
+      }
+    }
+    return { ok: true, published: true, eventId: event.id, attestation };
+  }
+
+  scores(days: 1 | 7 | 21 = 7, publishedOnly = false, limit = 50, now = Date.now()) {
+    const current = getCurrentPeriodId(now);
+    const rows = this.db.query(`SELECT pubkey, COUNT(*) AS games, SUM(points) AS points,
+      SUM(CASE WHEN result!='X' THEN 1 ELSE 0 END) AS wins,
+      SUM(CASE WHEN published_at IS NOT NULL THEN 1 ELSE 0 END) AS publishedGames
+      FROM game_submissions WHERE verified_completion=1 AND period_id BETWEEN ?1 AND ?2
+      AND (?3=0 OR published_at IS NOT NULL)
+      GROUP BY pubkey ORDER BY points DESC, wins DESC, games DESC, pubkey ASC LIMIT ?4`)
+      .all(current - days + 1, current, publishedOnly ? 1 : 0, Math.max(1, Math.min(200, limit)));
+    return { days, publishedOnly, rows };
   }
 
   validateSubmission(body: SubmitBody): {
@@ -490,6 +623,9 @@ export class Word5Service {
 
   async submit(body: SubmitBody): Promise<SubmitResult> {
     const { event, parsed, periodId, date, guesses } = this.validateSubmission(body);
+    const previous = this.db.query("SELECT event_id FROM game_submissions WHERE pubkey=?1 AND period_id=?2")
+      .get(event.pubkey, periodId) as { event_id: string } | null;
+    if (previous && previous.event_id !== event.id) throw new Error("Score already submitted for this player and period");
     const relayList = Array.from(new Set([...(body.relays || []), ...this.relays].filter((relay) => /^wss:\/\//.test(relay))));
     const gamestrRelayList = Array.from(new Set([...this.gamestrRelays, ...relayList].filter((relay) => /^wss:\/\//.test(relay))));
     const signedStats = parseSignedStats(event);
@@ -512,14 +648,7 @@ export class Word5Service {
       INSERT INTO game_submissions (
         event_id, pubkey, period_id, puzzle, puzzle_date, result, points, hard_mode, guesses_json, stats_json
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-      ON CONFLICT(pubkey, period_id) DO UPDATE SET
-        event_id = excluded.event_id,
-        result = excluded.result,
-        points = excluded.points,
-        hard_mode = excluded.hard_mode,
-        guesses_json = excluded.guesses_json,
-        stats_json = excluded.stats_json,
-        accepted_at = CURRENT_TIMESTAMP
+      ON CONFLICT(pubkey, period_id) DO NOTHING
     `);
     const insertAttestation = this.db.query(`
       INSERT OR REPLACE INTO word5_attestations (event_id, user_event_id, event_json)

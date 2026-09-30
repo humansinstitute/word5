@@ -1565,11 +1565,68 @@ async function displayLeaderboard(events) {
   }
 }
 
+let scoreDays = 7;
+let scorePublishedOnly = false;
+
+async function subscribeToScores() {
+  currentCompareState = null;
+  showLoading();
+  const postList = document.getElementById("postList");
+  try {
+    const response = await fetch(`api/scores?days=${scoreDays}&published=${scorePublishedOnly}`);
+    if (!response.ok) throw new Error(`Score API returned ${response.status}`);
+    const { rows } = await response.json();
+    postList.innerHTML = "";
+    const controls = document.createElement("div");
+    controls.className = "social-sub-switcher";
+    controls.innerHTML = [1, 7, 21].map((days) =>
+      `<button class="social-sub-btn${scoreDays === days ? " active" : ""}" data-days="${days}">${days} day${days === 1 ? "" : "s"}</button>`
+    ).join("") + `<label style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-size:13px;color:#ddd">
+      <input type="checkbox" id="publishedScoresOnly" ${scorePublishedOnly ? "checked" : ""}> Posted to Nostr only</label>`;
+    postList.appendChild(controls);
+    controls.querySelectorAll("[data-days]").forEach((button) => button.addEventListener("click", () => {
+      scoreDays = Number(button.dataset.days);
+      void subscribeToScores();
+    }));
+    controls.querySelector("#publishedScoresOnly").addEventListener("change", (event) => {
+      scorePublishedOnly = event.target.checked;
+      void subscribeToScores();
+    });
+    const note = document.createElement("p");
+    note.style.cssText = "color:#818384;font-size:12px;margin:12px 4px";
+    note.textContent = "Server recorded scores from signed-in games. A signature identifies a player; it does not prove fair play.";
+    postList.appendChild(note);
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No recorded scores in this period yet.";
+      postList.appendChild(empty);
+      return;
+    }
+    await loadProfiles(rows.map((row) => row.pubkey));
+    for (const [index, row] of rows.entries()) {
+      const identity = await getDisplayIdentity(row.pubkey);
+      const entry = document.createElement("div");
+      entry.className = "leaderboard-entry";
+      entry.dataset.pubkey = row.pubkey;
+      entry.innerHTML = `<div class="lb-rank">#${index + 1}</div>
+        <div class="lb-avatar">${renderAvatarHtml(identity.avatar)}</div>
+        <div class="lb-info"><div class="lb-name">${escapeHtml(identity.name)}</div>
+        <div class="lb-stats">${row.games} game${row.games === 1 ? "" : "s"} · ${row.wins} win${row.wins === 1 ? "" : "s"} · ${row.publishedGames} posted</div></div>
+        <div class="lb-streak"><div class="lb-streak-value">${row.points}</div><div class="lb-streak-label">points</div></div>`;
+      postList.appendChild(entry);
+    }
+  } catch (error) {
+    console.error("[Scores] Error:", error);
+    showEmptyState("Unable to load recorded scores right now.");
+  }
+}
+
 function getRouteFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get("tab");
   return {
-    tab: ["social", "follows", "top", "league"].includes(tab) ? tab : "social",
+    tab: ["social", "follows", "top", "scores", "league"].includes(tab) ? tab : "social",
     player: params.get("player") || "",
     opponent: params.get("opponent") || "",
   };
@@ -1616,6 +1673,9 @@ function switchTab(tabName, updateHistory = true) {
       break;
     case "top":
       subscribeToTop();
+      break;
+    case "scores":
+      subscribeToScores();
       break;
     case "league":
       if (window.LeagueManager?.renderLeagueList) {

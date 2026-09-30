@@ -115,8 +115,16 @@ const server = Bun.serve({
       if (url.pathname === "/api/visits/yesterday" && req.method === "GET") {
         return json(visits.yesterday());
       }
-      if (url.pathname === "/api/submit" && req.method === "POST") {
-        return json(await service.submit(await readJson(req)));
+      if (url.pathname === "/api/completion" && req.method === "POST") {
+        return json(service.complete((await readJson(req))?.event));
+      }
+      if (url.pathname === "/api/publication" && req.method === "POST") {
+        return json(await service.markPublished((await readJson(req))?.event));
+      }
+      if (url.pathname === "/api/scores" && req.method === "GET") {
+        const days = Number(url.searchParams.get("days") || 7);
+        if (days !== 1 && days !== 7 && days !== 21) throw new Error("days must be 1, 7 or 21");
+        return json(service.scores(days, url.searchParams.get("published") === "true", Number(url.searchParams.get("limit") || 50)));
       }
       if (url.pathname === "/api/leaderboard") {
         return json(service.leaderboard(Number(url.searchParams.get("limit") || 50)));

@@ -721,6 +721,7 @@
         <button id="postNostrBtn">Post to Nostr</button>
       </div>
       <div id="postStatus" style="margin-top:8px; font-size:12px; color:#818384;"></div>
+      <div id="scoreStatus" aria-live="polite" style="margin-top:6px; font-size:12px; color:#818384;"></div>
     </div>
   </div>
 
@@ -805,27 +806,15 @@
     const MAX_GUESSES = 6;
     const ROTATION_HOURS = 24;
     const WORD5_SERVER_API = {
-      async submitScore({ event, periodNum, relays }) {
-        const body = {
-          event,
-          relays,
-          repost: true,
-          game: {
-            periodId: state.periodId,
-            guesses: state.guesses,
-            hardMode: Boolean(state.hardMode),
-            won: Boolean(state.won),
-            stats: state.stats
-          }
-        };
-        const response = await fetch('/api/submit', {
+      async send(path, event) {
+        const response = await fetch(path, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body)
+          body: JSON.stringify({ event })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.ok) {
-          throw new Error(payload.error || `Word5 server rejected score #${periodNum}`);
+          throw new Error(payload.error || 'Word5 server rejected the event');
         }
         return payload;
       }
@@ -886,6 +875,7 @@
 
     // Game state
     let _nostrSyncPromise = null;
+    let recordCompletedScore = async () => null;
 
     let state = {
       targetWord: '',
@@ -893,6 +883,7 @@
       currentGuess: '',
       gameOver: false,
       won: false,
+      completedAt: 0,
       periodId: 0,
       lastCompletedPuzzle: 0,
       hardMode: false,
@@ -1242,6 +1233,7 @@
       }
 
       const guess = state.currentGuess;
+      const guessSubmittedAt = Math.floor(Date.now() / 1000);
       state.guesses.push(guess);
       state.currentGuess = '';
 
@@ -1279,14 +1271,18 @@
         if (guess === state.targetWord) {
           state.gameOver = true;
           state.won = true;
+          state.completedAt = guessSubmittedAt;
           updateStatsForCompletedGame(true);
           saveState();
+          void recordCompletedScore();
           setTimeout(() => showResult(), 500);
         } else if (state.guesses.length >= MAX_GUESSES) {
           state.gameOver = true;
           state.won = false;
+          state.completedAt = guessSubmittedAt;
           updateStatsForCompletedGame(false);
           saveState();
+          void recordCompletedScore();
           setTimeout(() => showResult(), 500);
         } else {
           saveState();
@@ -1397,6 +1393,7 @@
         guesses: state.guesses,
         gameOver: state.gameOver,
         won: state.won,
+        completedAt: state.completedAt,
         hardMode: state.hardMode,
         stats: state.stats
       };
@@ -1422,6 +1419,7 @@
             state.guesses = data.guesses || [];
             state.gameOver = data.gameOver || false;
             state.won = data.won || false;
+            state.completedAt = Number(data.completedAt) || 0;
           }
         } catch (e) {
           console.error('Failed to load state:', e);
@@ -1691,6 +1689,7 @@
 
       // If game was already over, show result
       if (state.gameOver) {
+        void recordCompletedScore();
         setTimeout(() => showResult(), 500);
       }
 
@@ -1725,6 +1724,68 @@
       // Post to Nostr button
       const postNostrBtn = document.getElementById('postNostrBtn');
       const postStatus = document.getElementById('postStatus');
+      const scoreStatus = document.getElementById('scoreStatus');
+      let completionPromise = null;
+      const completionKey = () => `word5-completion-${state.periodId}`;
+
+      recordCompletedScore = async function () {
+        if (!state.gameOver) return null;
+        if (completionPromise) return completionPromise;
+        completionPromise = (async () => {
+          const key = completionKey();
+          let event = JSON.parse(localStorage.getItem(key) || 'null');
+          if (!event) {
+            try {
+              await window.NostrSigners?.ready?.();
+              const player = window.NostrSession?.getPlayer?.();
+              const signedIn = player?.auth_mode === 'nip07' || player?.auth_mode === 'bunker' ||
+                (player?.auth_mode === 'session' && Boolean(player.imported_at));
+              if (!signedIn) {
+                scoreStatus.textContent = 'Anonymous game: connect your Nostr identity before the next puzzle to enter Top Scores.';
+                return null;
+              }
+              const signer = await window.NostrSigners.getActiveSigner();
+              const periodId = state.periodId;
+              event = await signer.signEvent({
+                kind: 30078,
+                created_at: state.completedAt || Math.floor(Date.now() / 1000),
+                tags: [['schema', 'word5.completion.v1']],
+                content: JSON.stringify({
+                  game: 'word5', periodId, puzzle: periodId % 1000,
+                  date: getDateForPeriod(periodId),
+                  result: state.won ? String(state.guesses.length) : 'X',
+                  guesses: state.guesses.map(guess => guess.toUpperCase()),
+                  hardMode: Boolean(state.hardMode)
+                })
+              });
+              localStorage.setItem(key, JSON.stringify(event));
+            } catch (error) {
+              scoreStatus.textContent = `Could not sign this score: ${error.message || error}`;
+              return null;
+            }
+          }
+          try {
+            const saved = await WORD5_SERVER_API.send('api/completion', event);
+            scoreStatus.textContent = `${saved.submission.points} points recorded${saved.submission.publishedAt ? ' · Posted to Nostr' : ''}`;
+            return saved;
+          } catch (error) {
+            scoreStatus.textContent = `Score pending: ${error.message || error}. Reopen this page to retry.`;
+            return null;
+          }
+        })();
+        try { return await completionPromise; } finally { completionPromise = null; }
+      };
+      if (state.gameOver) {
+        void recordCompletedScore().then(async (saved) => {
+          const posted = JSON.parse(localStorage.getItem(`word5-publication-${state.periodId}`) || 'null');
+          if (saved && posted) {
+            try {
+              await WORD5_SERVER_API.send('api/publication', posted);
+              scoreStatus.textContent = 'Score recorded · Posted to Nostr';
+            } catch (error) { console.warn('Publication retry pending:', error); }
+          }
+        });
+      }
       const nostrPostConfirmModal = document.getElementById('nostrPostConfirmModal');
       const nostrPostPreview = document.getElementById('nostrPostPreview');
       const nostrPostCancelBtn = document.getElementById('nostrPostCancelBtn');
@@ -1877,21 +1938,19 @@
           if (!succeeded) {
             throw new Error('No relay confirmed the post (timeout or all failed)');
           }
+          localStorage.setItem(`word5-publication-${state.periodId}`, JSON.stringify(signed));
 
           postStatus.textContent = `Posted via ${signer.mode}`;
           showToast('Posted to Nostr!');
           try {
-            const verified = await WORD5_SERVER_API.submitScore({
-              event: signed,
-              periodNum,
-              relays
-            });
-            if (verified.attestation) {
-              showToast('Verified by Word5!');
+            const saved = await recordCompletedScore();
+            if (saved) {
+              await WORD5_SERVER_API.send('api/publication', signed);
+              scoreStatus.textContent = 'Score recorded · Posted to Nostr';
             }
           } catch (serverError) {
-            console.warn('Word5 server verification failed:', serverError);
-            showToast('Posted, server verification pending');
+            console.warn('Word5 publication confirmation failed:', serverError);
+            showToast('Posted; score publication status pending');
           }
           publishKind5555InBackground({
             signer,
