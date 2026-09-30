@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { Word5Service } from "./word5";
+import { VisitTracker } from "./visits";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const PORT = Number(process.env.PORT || 41005);
@@ -20,6 +21,7 @@ const service = new Word5Service({
   relays: RELAYS,
   gamestrRelays: GAMESTR_RELAYS,
 });
+const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -55,6 +57,9 @@ async function readJson(req: Request) {
 
 function staticResponse(pathname: string): Response {
   const safePath = pathname === "/" ? "/index.html" : pathname;
+  if (!/^\/(?:index\.html|social\.html|manifest\.webmanifest|assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*|js\/[a-zA-Z0-9][a-zA-Z0-9._-]*)$/.test(safePath)) {
+    return new Response("Not found", { status: 404 });
+  }
   const filePath = normalize(join(ROOT, safePath));
   if (!filePath.startsWith(ROOT) || !existsSync(filePath)) {
     return new Response("Not found", { status: 404 });
@@ -78,6 +83,13 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
+      }
+      if (url.pathname === "/api/visit" && req.method === "POST") {
+        const body = await readJson(req);
+        return json(visits.record(body?.sessionPubkey));
+      }
+      if (url.pathname === "/api/visits/yesterday" && req.method === "GET") {
+        return json(visits.yesterday());
       }
       if (url.pathname === "/api/submit" && req.method === "POST") {
         return json(await service.submit(await readJson(req)));

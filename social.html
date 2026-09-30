@@ -196,6 +196,15 @@
       gap: 0;
       border-bottom: 1px solid #3a3a3c;
     }
+    .yesterday-count {
+      width: 100%;
+      max-width: 500px;
+      padding: 9px 16px;
+      color: #d5b8f4;
+      font-size: 13px;
+      text-align: center;
+      border-bottom: 1px solid #3a3a3c;
+    }
     .tab {
       flex: 1;
       padding: 14px 16px;
@@ -894,6 +903,7 @@
     </div>
   </div>
 
+  <div id="yesterdayCount" class="yesterday-count" hidden></div>
   <div class="tab-bar">
     <button class="tab active" data-tab="social">Social</button>
     <button class="tab" data-tab="follows">Duels</button>
@@ -972,6 +982,7 @@
 
   <!-- Load nostr modules -->
   <script src="js/nostr-session.js?v=20260916-2"></script>
+  <script src="js/yesterday-count.js?v=20260930-1"></script>
   <script src="js/nostr-signers.js?v=20260916-2"></script>
   <script src="js/nostr-ui.js?v=20260916-2"></script>
   <script src="js/cache.js?v=20260916-2"></script>
