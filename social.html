@@ -197,15 +197,42 @@
       border-bottom: 1px solid #3a3a3c;
       overflow-x: auto;
     }
-    .yesterday-count {
+    .visit-count {
       width: 100%;
       max-width: 500px;
       padding: 9px 16px;
+      background: transparent;
+      border: 0;
       color: #d5b8f4;
       font-size: 13px;
       text-align: center;
       border-bottom: 1px solid #3a3a3c;
+      cursor: pointer;
     }
+    .visit-count:hover, .visit-count:focus-visible { color: #fff; text-decoration: underline; }
+    .visit-dialog {
+      width: min(94vw, 560px);
+      max-height: 85vh;
+      overflow-y: auto;
+      background: #1a1a1b;
+      border: 1px solid #3a3a3c;
+      border-radius: 10px;
+      color: #fff;
+      padding: 20px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    }
+    .visit-dialog::backdrop { background: rgba(0,0,0,0.7); }
+    .visit-dialog-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .visit-dialog h2 { margin: 0; font-size: 18px; }
+    .visit-dialog-note { color: #a3a3a5; font-size: 12px; line-height: 1.5; margin: 12px 0; }
+    .visit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .visit-table th, .visit-table td { padding: 9px 5px; border-bottom: 1px solid #3a3a3c; }
+    .visit-table th { color: #a3a3a5; font-weight: 600; text-align: left; }
+    .visit-table th:nth-child(n+2), .visit-table td:nth-child(n+2) { text-align: right; }
+    .visit-table td:first-child { white-space: nowrap; }
+    .visit-table tbody tr:first-child { color: #d5b8f4; }
+    .visit-status { color: #a3a3a5; padding: 18px 0; }
+    .visit-table[hidden], .visit-status[hidden] { display: none; }
     .tab {
       flex: 1 0 auto;
       padding: 14px 10px;
@@ -907,7 +934,7 @@
     </div>
   </div>
 
-  <div id="yesterdayCount" class="yesterday-count" hidden></div>
+  <button id="currentVisitCount" class="visit-count" type="button" aria-haspopup="dialog" aria-controls="visitsDialog">Loading current game players…</button>
   <div class="tab-bar">
     <button class="tab active" data-tab="social">Social</button>
     <button class="tab" data-tab="follows">Duels</button>
@@ -919,6 +946,19 @@
   <div class="post-list" id="postList">
     <div class="loading"></div>
   </div>
+
+  <dialog id="visitsDialog" class="visit-dialog" aria-labelledby="visitsDialogTitle" aria-describedby="visitsDialogNote">
+    <div class="visit-dialog-header">
+      <h2 id="visitsDialogTitle">Game visits · last 7 games</h2>
+      <button id="visitsDialogClose" class="nostr-btn" type="button" style="width:auto;padding:8px 12px;margin:0;">Close</button>
+    </div>
+    <p id="visitsDialogNote" class="visit-dialog-note">Each game runs from 00:00 UTC to 00:00 UTC the next day (08:00 Perth). Players are unique sessions; visits count every game-page load. Social-page views are excluded.</p>
+    <div id="visitsStatus" class="visit-status" role="status" aria-live="polite">Loading visits…</div>
+    <table id="visitsTable" class="visit-table" hidden>
+      <thead><tr><th scope="col">Game · UTC date</th><th scope="col">Players</th><th scope="col">Visits</th></tr></thead>
+      <tbody id="visitsTableBody"></tbody>
+    </table>
+  </dialog>
 
   <!-- Streak modal -->
   <div id="streakModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:1300;padding:12px;">
@@ -987,7 +1027,7 @@
 
   <!-- Load nostr modules -->
   <script src="js/nostr-session.js?v=20260916-2"></script>
-  <script src="js/yesterday-count.js?v=20260930-2"></script>
+  <script src="js/yesterday-count.js?v=20260930-current"></script>
   <script src="js/nostr-signers.js?v=20260916-2"></script>
   <script src="js/nostr-ui.js?v=20260916-2"></script>
   <script src="js/cache.js?v=20260916-2"></script>

@@ -115,6 +115,12 @@ const server = Bun.serve({
       if ((url.pathname === "/api/visits/last-completed-game" || url.pathname === "/api/visits/yesterday") && req.method === "GET") {
         return json(visits.yesterday());
       }
+      if (url.pathname === "/api/visits/current-game" && req.method === "GET") {
+        return json({ ...visits.recentGames(new Date(), 1)[0], timezone: "UTC" });
+      }
+      if (url.pathname === "/api/visits/recent-games" && req.method === "GET") {
+        return json({ games: visits.recentGames(), timezone: "UTC" });
+      }
       if (url.pathname === "/api/completion" && req.method === "POST") {
         return json(service.complete((await readJson(req))?.event));
       }

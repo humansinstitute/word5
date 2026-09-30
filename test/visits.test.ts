@@ -7,6 +7,35 @@ import { VisitTracker } from "../src/visits";
 import { VisitAnnouncer, currentMilestone, milestoneCrossed } from "../src/visit-announcements";
 
 describe("game visits", () => {
+  test("returns current and seven UTC games with unique players, repeat visits, and zero days", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "word5-recent-visits-")), "visits.sqlite");
+    const db = new Database(path);
+    const tracker = new VisitTracker(db, path);
+    const player = "a".repeat(64);
+    tracker.record(player, new Date("2026-09-29T23:59:00Z"));
+    tracker.record(player, new Date("2026-09-29T23:59:30Z"));
+    tracker.record("b".repeat(64), new Date("2026-09-29T23:59:45Z"));
+    tracker.record(player, new Date("2026-09-30T00:00:00Z"));
+    tracker.record(player, new Date("2026-09-30T00:01:00Z"));
+    tracker.record("c".repeat(64), new Date("2026-09-24T12:00:00Z"));
+    tracker.record("d".repeat(64), new Date("2026-09-23T12:00:00Z"));
+
+    const beforeRollover = tracker.recentGames(new Date("2026-09-29T23:59:59Z"), 1)[0];
+    expect(beforeRollover).toEqual({ periodId: 20725, gameNumber: 725, puzzleDate: "2026-09-29", people: 2, visits: 3 });
+    const games = tracker.recentGames(new Date("2026-09-30T00:02:00Z"));
+    expect(games).toHaveLength(7);
+    expect(games[0]).toEqual({ periodId: 20726, gameNumber: 726, puzzleDate: "2026-09-30", people: 1, visits: 2 });
+    expect(games[1]).toEqual(beforeRollover);
+    expect(games[6]).toEqual({ periodId: 20720, gameNumber: 720, puzzleDate: "2026-09-24", people: 1, visits: 1 });
+    expect(games.slice(2, 6).every((game) => game.people === 0 && game.visits === 0)).toBe(true);
+    expect(games.some((game) => game.puzzleDate === "2026-09-23")).toBe(false);
+    expect(Object.keys(games[0])).toEqual(["periodId", "gameNumber", "puzzleDate", "people", "visits"]);
+    expect(tracker.recentGames(new Date("2026-10-01T00:00:00Z"), 1)[0]).toEqual({
+      periodId: 20727, gameNumber: 727, puzzleDate: "2026-10-01", people: 0, visits: 0,
+    });
+    db.close();
+  });
+
   test("deduplicates by puzzle and records Perth visit hours across rollover", () => {
     const path = join(mkdtempSync(join(tmpdir(), "word5-visits-")), "visits.sqlite");
     const db = new Database(path);

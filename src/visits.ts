@@ -103,4 +103,29 @@ export class VisitTracker {
       timezone: "UTC",
     };
   }
+
+  recentGames(now = new Date(), count = 7) {
+    const currentPeriodId = getCurrentPeriodId(now.getTime());
+    const firstPeriodId = currentPeriodId - count + 1;
+    const people = this.db.query(`
+      SELECT period_id, COUNT(*) AS people
+      FROM game_visitors WHERE period_id BETWEEN ? AND ? GROUP BY period_id
+    `).all(firstPeriodId, currentPeriodId) as Array<{ period_id: number; people: number }>;
+    const visits = this.db.query(`
+      SELECT period_id, COUNT(*) AS visits
+      FROM game_visit_events WHERE period_id BETWEEN ? AND ? GROUP BY period_id
+    `).all(firstPeriodId, currentPeriodId) as Array<{ period_id: number; visits: number }>;
+    const peopleByPeriod = new Map(people.map((row) => [row.period_id, row.people]));
+    const visitsByPeriod = new Map(visits.map((row) => [row.period_id, row.visits]));
+    return Array.from({ length: count }, (_, offset) => {
+      const periodId = currentPeriodId - offset;
+      return {
+        periodId,
+        gameNumber: getGameNumberForPeriod(periodId),
+        puzzleDate: getDateForPeriod(periodId),
+        people: peopleByPeriod.get(periodId) ?? 0,
+        visits: visitsByPeriod.get(periodId) ?? 0,
+      };
+    });
+  }
 }
