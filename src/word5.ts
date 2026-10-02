@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 const WORD_LENGTH = 5;
 const MAX_GUESSES = 6;
 const ROTATION_HOURS = 24;
+export const PERIOD_MS = ROTATION_HOURS * 60 * 60 * 1000;
 const SCORE_BY_RESULT: Record<string, number> = {
   "1": 10,
   "2": 7,

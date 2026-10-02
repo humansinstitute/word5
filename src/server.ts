@@ -3,6 +3,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
 import { VisitAnnouncer } from "./visit-announcements";
+import { ScoreAnnouncer, startScoreAnnouncements } from "./score-announcements";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const PORT = Number(process.env.PORT || 41005);
@@ -23,6 +24,8 @@ const service = new Word5Service({
   gamestrRelays: GAMESTR_RELAYS,
 });
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
+const scoreAnnouncer = new ScoreAnnouncer(service.db, service.secretKey, RELAYS);
+startScoreAnnouncements(scoreAnnouncer);
 const visitAnnouncer = new VisitAnnouncer(service.db, service.secretKey, RELAYS);
 async function announceCompletedGame() {
   try {
@@ -101,7 +104,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
     try {
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", time: new Date().toISOString() });
+        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), scoreRecap: scoreAnnouncer.status() });
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
