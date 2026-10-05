@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/icon-word5.png">
+  <link rel="shortcut icon" type="image/png" sizes="512x512" href="assets/icon-word5.png">
+  <link rel="apple-touch-icon" href="assets/icon-word5.png">
+  <meta name="theme-color" content="#121213">
+  <title>WORD5 Daily chat</title>
+  <style>
+    * { box-sizing:border-box; }
+    body { margin:0;background:#121213;color:#eee;font-family:system-ui,sans-serif; }
+    .header { display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid #444; }
+    .header-right { display:flex;align-items:center;gap:8px; }
+    .title { font-weight:800;font-size:24px; }
+    .nav-link { color:#ddd;text-decoration:none;padding:6px; }
+    .nav-link.active { color:#c084fc; }
+    .header-left { position:relative; }
+    .avatar-bubble { width:36px;height:36px;border-radius:50%;background:#333;color:white;border:1px solid #666;cursor:pointer; }
+    .avatar-dropdown { display:none;position:absolute;top:42px;left:0;width:240px;padding:12px;background:#222;border:1px solid #555;z-index:30; }
+    .avatar-dropdown.open { display:block; }
+    .avatar-label,.app-version { font-size:12px;overflow-wrap:anywhere; }
+    .nostr-btn { width:100%;padding:10px;margin:6px 0;background:#333;border:1px solid #555;color:white;border-radius:6px;cursor:pointer; }
+    .nostr-input,select { width:100%;padding:10px;background:#222;color:white;border:1px solid #555;border-radius:6px; }
+    textarea { min-height:80px;resize:vertical; }
+    button:disabled { opacity:.5;cursor:default; }
+    .modal-overlay { display:none;position:fixed;inset:0;background:#000b;align-items:center;justify-content:center;z-index:50;padding:16px; }
+    .modal-overlay.visible { display:flex; }
+    .modal { background:#222;border-radius:8px;padding:20px;max-width:480px;width:100%;max-height:90vh;overflow:auto; }
+    [hidden] { display:none !important; }
+    #chatMessages li { border-bottom:1px solid #444;padding:12px 0; }
+    #chatMessages p { white-space:pre-wrap;overflow-wrap:anywhere; }
+    @media (max-width:480px) {
+      .header { padding:12px 8px; }
+      .title { font-size:20px;letter-spacing:.04em; }
+      .header-right { gap:0; }
+      .nav-link { font-size:12px;padding:6px 5px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <button id="nostrAvatarBubble" class="avatar-bubble" aria-label="Menu">☰</button>
+      <div id="nostrAvatarDropdown" class="avatar-dropdown">
+        <div id="nostrAvatarLabel" class="avatar-label">Session: loading…</div>
+        <button id="loginNostrBtn" class="nostr-btn" style="background:#9333ea;">Login Nostr</button>
+        <button id="profileOpenBtn" class="nostr-btn">My Profile</button>
+        <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
+        <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
+        <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
+        <div class="app-version">Daily chat · 20261005-2</div>
+      </div>
+    </div>
+    <div class="title">WORD5</div>
+    <div class="header-right">
+      <button id="donateBtn" class="nav-link" aria-label="Donate" style="border:none;background:none;padding:6px 8px;font-size:16px;cursor:pointer;">⚡</button>
+      <a href="index.html" class="nav-link">Play</a>
+      <a href="social.html" class="nav-link">Social</a>
+      <a id="chatNav" href="chat.html" class="nav-link active" hidden>Chat</a>
+    </div>
+  </div>
+
+  <main style="max-width:640px;margin:24px auto;padding:16px">
+    <h1>Daily chat</h1>
+    <p>Encrypted spoiler chat for players who finished. Everyone in a room shares its key.</p>
+    <button id="chatLogin" type="button" class="nostr-btn">Sign in with Nostr</button>
+    <label for="chatRoom">Puzzle date</label> <select id="chatRoom"></select>
+    <p id="chatExpiry" aria-live="off"></p>
+    <p id="chatStatus" role="status"></p>
+    <ol id="chatMessages" style="padding:0;list-style:none"></ol>
+    <form id="chatForm"><label for="chatText">Message (text only, up to 2000 UTF-8 bytes)</label>
+      <textarea id="chatText" maxlength="2000" required class="nostr-input"></textarea>
+      <button id="chatSend" type="submit" class="nostr-btn" disabled>Send</button>
+    </form>
+  </main>
+  <!-- Load nostr modules -->
+  <script src="js/nostr-session.js?v=20260916-2"></script>
+  <script src="js/nostr-signers.js?v=20260916-2"></script>
+  <script src="js/nostr-ui.js?v=20260916-2"></script>
+  <script src="js/chat-crypto.js?v=20261005-2"></script>
+  <script src="js/daily-chat.js?v=20261005-2"></script>
+</body>
+</html>

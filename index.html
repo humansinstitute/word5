@@ -639,6 +639,12 @@
       font-weight: 700;
       margin-left: 8px;
     }
+    @media (max-width:480px) {
+      .header { padding:12px 8px; }
+      .title { font-size:20px;letter-spacing:.04em; }
+      .header-right { gap:0; }
+      .nav-link { font-size:12px;padding:6px 5px; }
+    }
   </style>
 </head>
 <body>
@@ -670,6 +676,7 @@
       <button id="donateBtn" class="nav-link" aria-label="Donate" style="border:none;background:none;padding:6px 8px;font-size:16px;cursor:pointer;">⚡</button>
       <span class="nav-link active">Play</span>
       <a href="social.html" class="nav-link">Social</a>
+      <a id="chatNav" href="chat.html" class="nav-link" hidden>Chat</a>
       <button id="helpBtn" class="help-btn" aria-label="How to play">?</button>
     </div>
   </div>
@@ -712,6 +719,7 @@
         <div class="next-word-label">NEXT WORD</div>
         <div class="next-word-timer" id="modalTimer">--:--:--</div>
       </div>
+      <button id="discussGame" type="button">Discuss today’s game</button>
       <div id="completionDonate" class="completion-donate">
         <p>Word5 is a free game, but hosted on real servers. If you find it valuable, please consider donating</p>
         <button id="completionDonateBtn">Donate</button>
@@ -796,6 +804,8 @@
   <script src="js/nostr-signers.js?v=20260916-2"></script>
   <script src="js/nostr-post.js?v=20260916-2"></script>
   <script src="js/nostr-ui.js?v=20260916-2"></script>
+  <script src="js/chat-crypto.js?v=20261005-2"></script>
+  <script src="js/daily-chat.js?v=20261005-2"></script>
   <script>
     // Word lists - loaded from external files
     let ANSWERS = [];  // Daily word pool (curated list)
@@ -1726,7 +1736,7 @@
       const postStatus = document.getElementById('postStatus');
       const scoreStatus = document.getElementById('scoreStatus');
       let completionPromise = null;
-      const completionKey = () => `word5-completion-${state.periodId}`;
+      const completionKey = () => { const p=window.NostrSession?.getPlayer?.(); return `word5-completion-${state.periodId}-${p?.linked_pubkey || p?.pubkey || 'anonymous'}`; };
 
       recordCompletedScore = async function () {
         if (!state.gameOver) return null;
@@ -1766,6 +1776,7 @@
           }
           try {
             const saved = await WORD5_SERVER_API.send('api/completion', event);
+            window.dispatchEvent(new Event('word5-completed'));
             scoreStatus.textContent = `${saved.submission.points} points recorded${saved.submission.publishedAt ? ' · Posted to Nostr' : ''}`;
             return saved;
           } catch (error) {
@@ -1775,6 +1786,8 @@
         })();
         try { return await completionPromise; } finally { completionPromise = null; }
       };
+      window.Word5App.recordCompletedScore = recordCompletedScore;
+      window.addEventListener("player-ready", () => { if (state.gameOver) void recordCompletedScore(); });
       if (state.gameOver) {
         void recordCompletedScore().then(async (saved) => {
           const posted = JSON.parse(localStorage.getItem(`word5-publication-${state.periodId}`) || 'null');

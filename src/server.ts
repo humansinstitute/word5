@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
+import { DailyChat } from "./chat";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
 import { VisitAnnouncer } from "./visit-announcements";
@@ -23,6 +24,7 @@ const service = new Word5Service({
   relays: RELAYS,
   gamestrRelays: GAMESTR_RELAYS,
 });
+const chat = new DailyChat(service);
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
 const scoreAnnouncer = new ScoreAnnouncer(service.db, service.secretKey, RELAYS);
 startScoreAnnouncements(scoreAnnouncer);
@@ -82,7 +84,7 @@ async function readJson(req: Request) {
 
 function staticResponse(pathname: string): Response {
   const safePath = pathname === "/" ? "/index.html" : pathname;
-  if (!/^\/(?:index\.html|social\.html|manifest\.webmanifest|assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*|js\/[a-zA-Z0-9][a-zA-Z0-9._-]*)$/.test(safePath)) {
+  if (!/^\/(?:index\.html|social\.html|chat\.html|manifest\.webmanifest|assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*|js\/[a-zA-Z0-9][a-zA-Z0-9._-]*)$/.test(safePath)) {
     return new Response("Not found", { status: 404 });
   }
   const filePath = normalize(join(ROOT, safePath));
@@ -103,8 +105,10 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     try {
+      // Page loads and API access also discard expired rooms for anonymous visitors.
+      if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), scoreRecap: scoreAnnouncer.status() });
+        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", scoreRecap: scoreAnnouncer.status() });
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
@@ -123,6 +127,22 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/visits/recent-games" && req.method === "GET") {
         return json({ games: visits.recentGames(), timezone: "UTC" });
+      }
+      if (/^\/api\/chat\/(rooms|read|send)$/.test(url.pathname) && req.method === "POST") {
+        if (Number(req.headers.get("content-length") || 0) > 8000) throw new Error("Chat request too large");
+        const reader = req.body?.getReader();
+        if (!reader) throw new Error("Missing chat request");
+        const chunks: Uint8Array[] = [];
+        let length = 0;
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          length += value.length;
+          if (length > 8000) { await reader.cancel(); throw new Error("Chat request too large"); }
+          chunks.push(value);
+        }
+        const text = Buffer.concat(chunks).toString("utf8");
+        return json(chat.request(JSON.parse(text)?.event, url.pathname.split("/").at(-1)!));
       }
       if (url.pathname === "/api/completion" && req.method === "POST") {
         return json(service.complete((await readJson(req))?.event));
