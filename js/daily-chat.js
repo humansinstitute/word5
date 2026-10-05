@@ -1,5 +1,5 @@
 (function () {
-  let identity = null, rooms = [], generation = 0, polling = false;
+  let identity = null, rooms = [], generation = 0, polling = false, forceScroll = true;
   const $ = id => document.getElementById(id);
   const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b=>b.toString(16).padStart(2,'0')).join('');
   const signedIn = () => {
@@ -28,7 +28,7 @@
   }
   async function refresh() {
     const run = ++generation;
-    rooms = [];
+    rooms = []; forceScroll=true;
     if ($('chatNav')) $('chatNav').hidden=true;
     renderRooms();
     if (!signedIn()) { identity = null; prune(); if ($('chatStatus')) $('chatStatus').textContent = 'Finish a daily puzzle to unlock chat.'; return; }
@@ -47,6 +47,21 @@
       await read();
     } catch (error) { if (run===generation && $('chatStatus')) $('chatStatus').textContent = error.message; }
   }
+  function updateEmpty() {
+    const empty = $('chatEmpty');
+    if (!empty) return;
+    const hasMessages = $('chatMessages').children.length > 0;
+    empty.hidden = hasMessages;
+    $('chatMarker').hidden = !hasMessages;
+    empty.querySelector('h2').textContent = rooms.length ? 'You made it. Let’s talk.' : 'Your post-game hangout';
+    empty.querySelector('p').textContent = rooms.length ? 'How did you find today’s word? Be the first to start the conversation.' : 'Finish a daily puzzle to join the conversation with other players.';
+  }
+  function sizeComposer() {
+    const input = $('chatText');
+    if (!input) return;
+    input.style.height = '40px';
+    input.style.height = `${Math.min(128, Math.max(40, input.scrollHeight))}px`;
+  }
   function renderRooms() {
     const select = $('chatRoom');
     if (!select) return;
@@ -57,13 +72,22 @@
     }
     if (rooms.some(room=>String(room.period)===selected)) select.value=selected;
     $('chatSend').disabled=!rooms.length;
+    if ($('chatText')) $('chatText').disabled=!rooms.length;
+    if (selected !== select.value) { $('chatMessages').replaceChildren(); forceScroll=true; void read(); }
     updateCountdown();
     if (!rooms.length) { $('chatMessages').replaceChildren(); $('chatExpiry').textContent=''; }
+    updateEmpty();
   }
   const selectedRoom = () => rooms.find(room=>String(room.period)===$('chatRoom')?.value);
   function updateCountdown() {
     const room=selectedRoom();
-    if(room) { const seconds=Math.max(0,Math.ceil((room.expiresAt-Date.now())/1000)); $('chatExpiry').textContent=`Expires in ${Math.floor(seconds/3600)}h ${Math.floor(seconds%3600/60)}m ${seconds%60}s · ${new Date(room.expiresAt).toISOString().replace('.000Z',' UTC')}`; }
+    if(room) {
+      const seconds=Math.max(0,Math.ceil((room.expiresAt-Date.now())/1000));
+      const days=Math.floor(seconds/86400), hours=Math.floor(seconds%86400/3600), minutes=Math.floor(seconds%3600/60);
+      $('chatExpiry').textContent=`Closes in ${days ? `${days}d ` : ''}${hours}h ${minutes}m`;
+      $('chatExpiry').title=`Room closes ${new Date(room.expiresAt).toISOString().replace('.000Z',' UTC')}`;
+      if ($('chatMarker')) $('chatMarker').textContent=`${room.date} · shared with finishers`;
+    }
   }
   async function read() {
     const room = selectedRoom(), run = generation;
@@ -79,13 +103,28 @@
           const body = JSON.parse(event.content);
           if (body.period!==room.period || body.action!=='send') continue;
           const text = await Word5ChatCrypto.decrypt(body,room.key,event.pubkey);
-          const item = document.createElement('li');
-          const sender = document.createElement('small'); sender.textContent=`${event.pubkey.slice(0,12)}… · ${new Date(event.created_at*1000).toLocaleTimeString()}`; sender.title=event.pubkey;
-          const message=document.createElement('p'); message.textContent=text;
-          item.append(sender,message); nodes.push(item);
+          const own = event.pubkey === identity;
+          const item = document.createElement('li'); item.className=`chat-message${own ? ' own' : ''}`; item.dataset.messageId=event.id;
+          const avatar=document.createElement('div'); avatar.className='message-avatar'; avatar.textContent=own ? 'ME' : event.pubkey.slice(0,2).toUpperCase(); avatar.setAttribute('aria-hidden','true');
+          avatar.style.setProperty('--avatar-hue',String(parseInt(event.pubkey.slice(0,6),16)%360));
+          const content=document.createElement('div'); content.className='message-content';
+          const meta=document.createElement('div'); meta.className='message-meta';
+          const sender=document.createElement('span'); sender.className='message-name'; sender.textContent=own ? 'You' : `${event.pubkey.slice(0,6)}…${event.pubkey.slice(-4)}`; sender.title=event.pubkey;
+          const time=document.createElement('time'); time.dateTime=new Date(event.created_at*1000).toISOString(); time.textContent=new Date(event.created_at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); time.title=new Date(event.created_at*1000).toLocaleString();
+          const message=document.createElement('p'); message.className='message-bubble'; message.textContent=text;
+          meta.append(sender,time); content.append(meta,message); item.append(avatar,content); nodes.push(item);
         } catch { /* Ignore malformed or unauthentic ciphertext. */ }
       }
-      if (run===generation && selectedRoom()===room && room.expiresAt>Date.now()) $('chatMessages').replaceChildren(...nodes);
+      if (run===generation && selectedRoom()===room && room.expiresAt>Date.now()) {
+        const list=$('chatMessages'), history=$('chatHistory');
+        const changed=nodes.length!==list.children.length || nodes.some((node,index)=>node.dataset.messageId!==list.children[index]?.dataset.messageId);
+        if(changed) {
+          const follow=forceScroll || !history || history.scrollHeight-history.scrollTop-history.clientHeight<100;
+          list.replaceChildren(...nodes); updateEmpty();
+          if(follow && history) history.scrollTop=history.scrollHeight;
+        }
+        forceScroll=false;
+      }
     } catch(error) { if (run===generation) $('chatStatus').textContent=error.message; }
     finally { polling=false; }
   }
@@ -99,7 +138,7 @@
   window.addEventListener('player-ready',()=>{
     const p=window.NostrSession?.getPlayer?.();
     const nextIdentity=signedIn() ? (p.linked_pubkey || p.pubkey) : null;
-    generation++; identity=null; rooms=[];
+    generation++; identity=null; rooms=[]; forceScroll=true;
     Word5ChatCrypto.prune(sessionStorage,nextIdentity);
     renderRooms(); void refresh();
   });
@@ -108,7 +147,7 @@
     await NostrSigners.ready();
     $('discussGame')?.addEventListener('click',discuss);
     $('chatLogin')?.addEventListener('click',()=>$('loginNostrBtn')?.click());
-    $('chatRoom')?.addEventListener('change',()=>{ $('chatMessages').replaceChildren(); updateCountdown(); void read(); });
+    $('chatRoom')?.addEventListener('change',()=>{ $('chatMessages').replaceChildren(); forceScroll=true; updateEmpty(); updateCountdown(); void read(); });
     $('chatForm')?.addEventListener('submit',async event=>{
       event.preventDefault(); const room=selectedRoom(), run=generation;
       if (!room || room.expiresAt<=Date.now()) return;
@@ -118,10 +157,18 @@
         const messageNonce=nonce();
         const payload=await Word5ChatCrypto.encrypt($('chatText').value,room.key,room.period,identity,messageNonce);
         await request('send',{period:room.period,nonce:messageNonce,...payload});
-        if(run===generation) { $('chatText').value=''; $('chatStatus').textContent=''; await read(); }
+        if(run===generation) { $('chatText').value=''; sizeComposer(); forceScroll=true; $('chatStatus').textContent=''; await read(); }
       } catch(error) { if(run===generation) $('chatStatus').textContent=error.message; }
       finally { if(run===generation) $('chatSend').disabled=!selectedRoom(); }
     });
+    $('chatText')?.addEventListener('input',sizeComposer);
+    $('chatText')?.addEventListener('keydown',event=>{
+      if(event.key==='Enter' && !event.shiftKey && !event.isComposing && !matchMedia('(pointer:coarse)').matches) { event.preventDefault(); if(!$('chatSend').disabled) $('chatForm').requestSubmit(); }
+    });
+    if ($('chatHistory') && window.visualViewport) {
+      const fitViewport=()=>{ document.body.style.height=`${window.visualViewport.height}px`; };
+      window.visualViewport.addEventListener('resize',fitViewport); fitViewport();
+    }
     await refresh();
     setInterval(()=>{
       const before=rooms.length; prune(); if(before!==rooms.length) renderRooms();

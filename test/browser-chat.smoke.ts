@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
-import { Word5Service, getCurrentPeriodId, getWordForPeriod } from '../src/word5';
+import { Word5Service, getCurrentPeriodId, getDateForPeriod, getWordForPeriod } from '../src/word5';
 import { DailyChat } from '../src/chat';
 const {chromium} = await import(process.env.WORD5_PLAYWRIGHT_MODULE || 'playwright');
 const dir=mkdtempSync(join(tmpdir(),'word5-browser-')),root=resolve(import.meta.dir,'..');
@@ -44,11 +44,25 @@ try {
   await page.locator('#discussGame').click();await page.waitForURL('**/chat.html');
   await page.waitForFunction(()=>!(document.getElementById('chatSend') as HTMLButtonElement).disabled);
   const text=`${loss?'loss':'win'} <img src=x onerror=alert(1)>`;
+  if(loss) await page.screenshot({path:join(root,'tmp/docs/handoffs','chat-empty.png')});
   await page.locator('#chatText').fill(text);await page.locator('#chatSend').click();
   await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
   if(await page.locator('#chatMessages img').count()) throw new Error('Unsafe rendering');
-  if(!(await page.locator('#chatExpiry').textContent())?.includes('Expires in')) throw new Error('Countdown missing');
+  if(!(await page.locator('#chatExpiry').textContent())?.includes('Closes in')) throw new Error('Countdown missing');
   await page.reload();await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
+  if(!loss) {
+   const otherSecret=generateSecretKey(),otherPublic=getPublicKey(otherSecret);
+   const auth=(action:string,fields:any={})=>finalizeEvent({kind:30078,created_at:Math.floor(Date.now()/1000),tags:[['schema','word5.chat.v1']],content:JSON.stringify({action,nonce:crypto.randomUUID().replaceAll("-", ""),...fields})},otherSecret);
+   service.complete(finalizeEvent({kind:30078,created_at:Math.floor(Date.now()/1000),tags:[['schema','word5.completion.v1']],content:JSON.stringify({game:'word5',periodId:period,puzzle:period%1000,date:getDateForPeriod(period),result:'1',guesses:[answer],hardMode:false})},otherSecret));
+   const room=(chat.request(auth('rooms'),'rooms') as any).rooms.find((room:any)=>room.period===period);
+   const otherText='That last guess was a close one! How did everyone else get on?';
+   const payload=await page.evaluate(async ({key,period,otherPublic,otherText})=> (window as any).Word5ChatCrypto.encrypt(otherText,key,period,otherPublic,'0123456789abcdef0123456789abcdef'),{key:room.key,period,otherPublic,otherText});
+   chat.request(auth('send',{period,nonce:'0123456789abcdef0123456789abcdef',...payload}),'send');
+   await page.waitForTimeout(10500);
+   await page.locator('.chat-message:not(.own)').getByText(otherText,{exact:true}).waitFor();
+   if(await page.locator('.chat-message:not(.own) .message-name').last().textContent()==='You') throw new Error('Other sender mislabeled');
+   await page.screenshot({path:join(root,'tmp/docs/handoffs','chat-desktop.png')});
+  }
   if(!loss) {
    await page.route('**/api/chat/rooms',async route=>{
     const response=await route.fetch();
@@ -86,10 +100,24 @@ try {
   if(await page.locator('#chatLogin').count()) throw new Error('Unnecessary chat sign-in button');
   const text=Array(60).fill('long mobile text line').join('\n');
   await page.locator('#chatText').fill(text);await page.locator('#chatSend').click();await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
-  await page.locator('#chatText').scrollIntoViewIfNeeded();
-  const dimensions=await page.evaluate(()=>({width:document.documentElement.scrollWidth,viewport:innerWidth,height:document.documentElement.scrollHeight,screen:innerHeight,scroll:scrollY}));
-  if(dimensions.width>dimensions.viewport || dimensions.height<=dimensions.screen || dimensions.scroll<=0) throw new Error(`Mobile scrolling failed: ${JSON.stringify(dimensions)}`);
-  await page.locator('#chatText').fill('composer reachable');
+  const dimensions=await page.evaluate(()=>{
+   const history=document.getElementById('chatHistory')!, composer=document.getElementById('chatText')!.getBoundingClientRect();
+   return {width:document.documentElement.scrollWidth,viewport:innerWidth,historyHeight:history.scrollHeight,historyScreen:history.clientHeight,composerBottom:composer.bottom,screen:innerHeight};
+  });
+  if(dimensions.width>dimensions.viewport || dimensions.historyHeight<=dimensions.historyScreen || dimensions.composerBottom>dimensions.screen) throw new Error(`Mobile conversation layout failed: ${JSON.stringify(dimensions)}`);
+  if(await page.locator('.chat-message.own .message-name').last().textContent()!=='You') throw new Error('Own sender not identified');
+  await page.waitForTimeout(2100); // Respect the server's two-second send interval.
+  const followup=`composer reachable ${pk}`;
+  await page.locator('#chatText').fill(followup);
+  await page.locator('#chatSend').click(); await page.locator('#chatMessages').getByText(followup,{exact:true}).waitFor();
+  await page.evaluate(()=>{document.getElementById('chatHistory')!.scrollTop=0;});
+  await page.waitForTimeout(10500);
+  if(await page.evaluate(()=>document.getElementById('chatHistory')!.scrollTop)>5) throw new Error('Polling interrupted reading older messages');
+  await page.setViewportSize({width:320,height:400});
+  const composerBottom=await page.locator('#chatText').evaluate(el=>el.getBoundingClientRect().bottom);
+  if(composerBottom>400) throw new Error('Composer hidden in short keyboard viewport');
+  await page.setViewportSize({width:320,height:667});
+  await page.screenshot({path:join(root,'tmp/docs/handoffs',`chat-mobile-${loss?'loss':'win'}.png`)});
   await context.close();console.log(`Anonymous ${loss?'loss':'win'} → ephemeral key unlock → mobile header and long chat scrolling passed`);
  }
  if(errors.length) throw new Error(`Browser errors: ${errors.join('; ')}`);

@@ -30,8 +30,57 @@
     .modal-overlay.visible { display:flex; }
     .modal { background:#222;border-radius:8px;padding:20px;max-width:480px;width:100%;max-height:90vh;overflow:auto; }
     [hidden] { display:none !important; }
-    #chatMessages li { border-bottom:1px solid #444;padding:12px 0; }
-    #chatMessages p { white-space:pre-wrap;overflow-wrap:anywhere; }
+    :root { color-scheme:dark; }
+    body { height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#121213; }
+    .header { flex:none; }
+    .chat-shell { width:min(100%,780px);margin:24px auto;min-height:0;flex:1;display:flex;flex-direction:column;border:1px solid #343039;border-radius:20px;background:#19171c;overflow:hidden;box-shadow:0 16px 60px #0003; }
+    .room-header { padding:22px 24px 18px;border-bottom:1px solid #343039;flex:none; }
+    .room-heading { display:flex;align-items:center;gap:12px; }
+    .room-icon { width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:#a855f71a;color:#d8b4fe;font-size:24px; }
+    h1 { margin:0;font-size:21px;letter-spacing:-.03em; }
+    .room-subtitle { margin:5px 0 0;color:#a9a2b0;font-size:13px; }
+    .room-controls { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px; }
+    #chatRoom { width:auto;max-width:60%;background:#242128;border:1px solid #423a4c;font-size:13px;padding:9px 12px; }
+    #chatExpiry { margin:0;font-size:12px;color:#c9b5e4;text-align:right; }
+    .chat-history { flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px;scrollbar-width:thin;scrollbar-color:#53455f transparent; }
+    .conversation-marker { text-align:center;font-size:11px;color:#9f96aa;margin:0 0 24px; }
+    #chatMessages { padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:18px; }
+    .chat-message { display:flex;gap:10px;align-items:flex-end;max-width:86%;align-self:flex-start; }
+    .chat-message.own { align-self:flex-end;flex-direction:row-reverse; }
+    .message-avatar { width:30px;height:30px;flex:none;border-radius:10px;display:grid;place-items:center;background:hsl(var(--avatar-hue) 36% 25%);color:hsl(var(--avatar-hue) 65% 82%);font-size:10px;font-weight:700; }
+    .message-content { min-width:0; }
+    .message-meta { display:flex;align-items:baseline;gap:8px;margin:0 4px 6px;color:#a89caf;font-size:11px; }
+    .message-name { color:#ccc3d5;font-weight:600; }
+    .own .message-meta { justify-content:flex-end; }
+    .message-bubble { margin:0;border:1px solid #3c3443;background:#28232e;padding:11px 14px;border-radius:16px 16px 16px 4px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.55; }
+    .own .message-bubble { background:#7036ad;border-color:#8547c2;border-radius:16px 16px 4px 16px;color:#fff; }
+    .chat-empty { min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px 20px;color:#a9a2b0; }
+    .empty-icon { display:grid;place-items:center;width:64px;height:64px;border-radius:22px;background:#a855f715;color:#c69aea;margin-bottom:18px;font-size:32px; }
+    .chat-empty h2 { font-size:18px;color:#e4dcea;margin:0 0 8px; }
+    .chat-empty p { margin:0;max-width:280px;font-size:14px;line-height:1.6; }
+    .composer-area { flex:none;border-top:1px solid #343039;padding:14px 20px max(14px,env(safe-area-inset-bottom));background:#1d1922; }
+    #chatStatus { margin:0;color:#e0baf7;font-size:13px;line-height:1.5; }
+    #chatStatus:not(:empty) { margin-bottom:10px; }
+    #chatForm { display:flex;align-items:flex-end;gap:10px;background:#292330;border:1px solid #483751;padding:6px;border-radius:16px; }
+    #chatForm:focus-within { border-color:#b575eb;box-shadow:0 0 0 2px #a855f715; }
+    #chatText { display:block;min-height:40px;max-height:128px;height:40px;resize:none;background:transparent;border:0;outline:none;padding:10px;font:inherit;font-size:16px;line-height:20px; }
+    #chatText::placeholder { color:#9b8fa7; }
+    #chatSend { width:40px;height:40px;flex:none;display:grid;place-items:center;border:0;border-radius:11px;background:#a855f7;color:#fff;cursor:pointer; }
+    #chatSend:hover:enabled { background:#b36bf7; }
+    .composer-note { margin:9px 0 0;color:#8e829a;text-align:center;font-size:11px; }
+    .sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
+    @media (max-width:600px) {
+      .chat-shell { margin:0;border:0;border-radius:0; }
+      .room-header { padding:16px; }
+      .room-controls { margin-top:14px;gap:8px; }
+      #chatRoom { padding:8px;max-width:61%;font-size:12px; }
+      #chatExpiry { font-size:11px; }
+      .chat-history { padding:20px 12px; }
+      .chat-message { max-width:94%;gap:7px; }
+      .message-bubble { padding:10px 12px; }
+      .composer-area { padding:10px 12px max(10px,env(safe-area-inset-bottom)); }
+      .composer-note { font-size:10px; }
+    }
     @media (max-width:480px) {
       .header { padding:12px 8px; }
       .title { font-size:20px;letter-spacing:.04em; }
@@ -51,7 +100,7 @@
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
-        <div class="app-version">Daily chat · 20261005-2</div>
+        <div class="app-version">Daily chat · 20261005-3</div>
       </div>
     </div>
     <div class="title">WORD5</div>
@@ -63,23 +112,27 @@
     </div>
   </div>
 
-  <main style="max-width:640px;margin:24px auto;padding:16px">
-    <h1>Daily chat</h1>
-    <p>Encrypted spoiler chat for players who finished. Everyone in a room shares its key.</p>
-    <label for="chatRoom">Puzzle date</label> <select id="chatRoom"></select>
-    <p id="chatExpiry" aria-live="off"></p>
-    <p id="chatStatus" role="status"></p>
-    <ol id="chatMessages" style="padding:0;list-style:none"></ol>
-    <form id="chatForm"><label for="chatText">Message (text only, up to 2000 UTF-8 bytes)</label>
-      <textarea id="chatText" maxlength="2000" required class="nostr-input"></textarea>
-      <button id="chatSend" type="submit" class="nostr-btn" disabled>Send</button>
-    </form>
+  <main class="chat-shell" aria-label="Daily group chat">
+    <header class="room-header">
+      <div class="room-heading"><div class="room-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 10h10M7 14h6"/></svg></div><div><h1>Daily chat</h1><p class="room-subtitle">Puzzle finished. Spoilers welcome.</p></div></div>
+      <div class="room-controls"><label for="chatRoom" class="sr-only">Puzzle date</label><select id="chatRoom"></select><p id="chatExpiry" aria-live="off"></p></div>
+    </header>
+    <section id="chatHistory" class="chat-history" aria-label="Conversation" tabindex="0">
+      <div id="chatEmpty" class="chat-empty"><div class="empty-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 10h10M7 14h6"/></svg></div><h2>You made it. Let’s talk.</h2><p>How did you find today’s word? Be the first to start the conversation.</p></div>
+      <p id="chatMarker" class="conversation-marker" hidden>Today’s puzzle · shared with finishers</p>
+      <ol id="chatMessages" aria-label="Messages"></ol>
+    </section>
+    <div class="composer-area">
+      <p id="chatStatus" role="status"></p>
+      <form id="chatForm"><label for="chatText" class="sr-only">Message</label><textarea id="chatText" maxlength="2000" required class="nostr-input" rows="1" placeholder="Message the group…"></textarea><button id="chatSend" type="submit" aria-label="Send message" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14"/></svg></button></form>
+      <p class="composer-note">Encrypted group chat · disappears after 3 days</p>
+    </div>
   </main>
   <!-- Load nostr modules -->
   <script src="js/nostr-session.js?v=20260916-2"></script>
   <script src="js/nostr-signers.js?v=20260916-2"></script>
   <script src="js/nostr-ui.js?v=20260916-2"></script>
   <script src="js/chat-crypto.js?v=20261005-2"></script>
-  <script src="js/daily-chat.js?v=20261005-2"></script>
+  <script src="js/daily-chat.js?v=20261005-3"></script>
 </body>
 </html>
