@@ -1,6 +1,6 @@
 # Daily post-game chat
 
-Nostr sign-in and a server-verified private completion unlock a puzzle's room, for wins and exhausted guesses alike. Public score posts alone do not qualify. The existing completion validator recomputes outcomes from signed ordered guesses; this is casual spoiler protection, not proof that someone played without assistance.
+A Nostr identity (including the automatically generated anonymous session key) and a server-verified private completion unlock a puzzle's room, for wins and exhausted guesses alike. Public score posts alone do not qualify. The existing completion validator recomputes outcomes from signed ordered guesses; this is casual spoiler protection, not proof that someone played without assistance.
 
 The browser calls same-origin `POST api/chat/rooms`, `read`, and `send`. These requests are signed kind 30078 events with the sole schema tag `word5.chat.v1`, a matching action, and a random 128-bit nonce. Nothing is published to Nostr relays. `rooms` retrieves keys for the authenticated player's unexpired verified completions, including previous days. Identity changes clear cached keys and displayed messages.
 

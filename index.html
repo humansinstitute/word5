@@ -1749,7 +1749,7 @@
               await window.NostrSigners?.ready?.();
               const player = window.NostrSession?.getPlayer?.();
               const signedIn = player?.auth_mode === 'nip07' || player?.auth_mode === 'bunker' ||
-                (player?.auth_mode === 'session' && Boolean(player.imported_at));
+                (player?.auth_mode === 'session' && Boolean(player.privkey));
               if (!signedIn) {
                 scoreStatus.textContent = 'Anonymous game: connect your Nostr identity before the next puzzle to enter Top Scores.';
                 return null;

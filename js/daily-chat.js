@@ -4,12 +4,12 @@
   const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b=>b.toString(16).padStart(2,'0')).join('');
   const signedIn = () => {
     const p = window.NostrSession?.getPlayer?.();
-    return p && (p.auth_mode === 'nip07' || p.auth_mode === 'bunker' || (p.auth_mode === 'session' && p.imported_at));
+    return p && (p.auth_mode === 'nip07' || p.auth_mode === 'bunker' || (p.auth_mode === 'session' && p.privkey));
   };
   const initialPlayer = window.NostrSession?.getPlayer?.();
   Word5ChatCrypto.prune(sessionStorage, signedIn() ? (initialPlayer.linked_pubkey || initialPlayer.pubkey) : null);
   async function request(action, fields = {}) {
-    if (!signedIn()) throw new Error('Sign in with Nostr to discuss the game');
+    if (!signedIn()) throw new Error('Your Nostr session is unavailable; reload to try again');
     const signer = await NostrSigners.getActiveSigner();
     const pubkey = await signer.getPublicKey();
     if (pubkey !== identity) throw new Error('Identity changed; reopen chat');
@@ -31,7 +31,7 @@
     rooms = [];
     if ($('chatNav')) $('chatNav').hidden=true;
     renderRooms();
-    if (!signedIn()) { identity = null; prune(); if ($('chatStatus')) $('chatStatus').textContent = 'Sign in with Nostr, then finish a daily puzzle to unlock chat.'; return; }
+    if (!signedIn()) { identity = null; prune(); if ($('chatStatus')) $('chatStatus').textContent = 'Finish a daily puzzle to unlock chat.'; return; }
     try {
       const signer = await NostrSigners.getActiveSigner();
       const pk = await signer.getPublicKey();

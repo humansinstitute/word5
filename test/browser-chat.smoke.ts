@@ -52,7 +52,7 @@ try {
   if(!loss) {
    await page.route('**/api/chat/rooms',async route=>{
     const response=await route.fetch();
-    await page.evaluate(()=>{(window as any).NostrSession.updatePlayer({auth_mode:'session',imported_at:null,linked_pubkey:null});});
+    await page.evaluate(()=>{(window as any).NostrSession.updatePlayer({auth_mode:'session',imported_at:null,linked_pubkey:null,privkey:null});});
     await route.fulfill({response});
    });
    await page.evaluate(()=> (window as any).Word5Chat.refresh());
@@ -64,11 +64,11 @@ try {
   }
   await page.evaluate(()=>{ const originalNow=Date.now; Date.now=()=> (Math.floor(originalNow()/86400000)+3)*86400000; });
   await page.waitForFunction(()=>document.getElementById('chatMessages')?.children.length===0 && Object.keys(sessionStorage).filter(key=>key.startsWith('word5-chat:')).every(key=>JSON.parse(sessionStorage.getItem(key)!).length===0));
-  await page.evaluate(()=>{(window as any).NostrSession.updatePlayer({auth_mode:'session',imported_at:null,linked_pubkey:null});});
+  await page.evaluate(()=>{(window as any).NostrSession.updatePlayer({auth_mode:'session',imported_at:null,linked_pubkey:null,privkey:null});});
   await page.waitForFunction(()=>document.getElementById('chatMessages')?.children.length===0 && !Object.keys(sessionStorage).some(key=>key.startsWith('word5-chat:')));
   await context.close();console.log(`Browser ${loss?'loss':'win'} completion → chat → encrypted safe text → reload → exact expiry → identity cleanup passed`);
  }
- // Actual anonymous finish followed by NIP-07 login, on a narrow mobile viewport.
+ // Actual generated ephemeral identity completes and enters chat without signing in.
  for(const loss of [false,true]) {
   const sk=generateSecretKey(),pk=getPublicKey(sk);
   const context=await browser.newContext({viewport:{width:320,height:667}});
@@ -78,18 +78,19 @@ try {
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(`${server.url}index.html`);
   await page.waitForFunction(()=>Boolean((window as any).Word5App?.recordCompletedScore));
   for(const word of loss?Array(6).fill('OTHER'):[getWordForPeriod(service.answers,getCurrentPeriodId())]) {await page.keyboard.type(word);await page.keyboard.press('Enter');await page.waitForTimeout(2100);}
-  await page.locator('#discussGame').waitFor({state:'visible'});await page.locator('#discussGame').click();await page.locator('#loginChooserModal').waitFor({state:'visible'});
-  if(await page.locator('#chatNav').isVisible()) throw new Error('Anonymous chat navigation');
-  await page.locator('#loginOptExtension').click();await page.locator('#chatNav').waitFor({state:'visible'});
+  await page.locator('#discussGame').waitFor({state:'visible'});
+  await page.locator('#chatNav').waitFor({state:'visible'});
+  if(await page.locator('#loginChooserModal').isVisible()) throw new Error('Unnecessary anonymous login');
   if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth || document.querySelector('.title')!.getBoundingClientRect().right > document.querySelector('.header-right')!.getBoundingClientRect().left)) throw new Error('Mobile play header overflow or overlap');
   await page.locator('#discussGame').click();await page.waitForURL('**/chat.html');await page.waitForFunction(()=>!(document.getElementById('chatSend') as HTMLButtonElement).disabled);
+  if(await page.locator('#chatLogin').count()) throw new Error('Unnecessary chat sign-in button');
   const text=Array(60).fill('long mobile text line').join('\n');
   await page.locator('#chatText').fill(text);await page.locator('#chatSend').click();await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
   await page.locator('#chatText').scrollIntoViewIfNeeded();
   const dimensions=await page.evaluate(()=>({width:document.documentElement.scrollWidth,viewport:innerWidth,height:document.documentElement.scrollHeight,screen:innerHeight,scroll:scrollY}));
   if(dimensions.width>dimensions.viewport || dimensions.height<=dimensions.screen || dimensions.scroll<=0) throw new Error(`Mobile scrolling failed: ${JSON.stringify(dimensions)}`);
   await page.locator('#chatText').fill('composer reachable');
-  await context.close();console.log(`Anonymous ${loss?'loss':'win'} → NIP-07 login → unlock → mobile header and long chat scrolling passed`);
+  await context.close();console.log(`Anonymous ${loss?'loss':'win'} → ephemeral key unlock → mobile header and long chat scrolling passed`);
  }
  if(errors.length) throw new Error(`Browser errors: ${errors.join('; ')}`);
  console.log('All browser page-error checks passed');
