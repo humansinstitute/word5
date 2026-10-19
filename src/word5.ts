@@ -12,6 +12,7 @@ import {
 } from "nostr-tools";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { SOCIAL_HISTORY_SEED, SocialHistory } from "./social-history";
 
 const WORD_LENGTH = 5;
 const MAX_GUESSES = 6;
@@ -442,6 +443,8 @@ export class Word5Service {
   readonly gamestrRelays: string[];
   readonly secretKey: Uint8Array | null;
   readonly validWords: Set<string>;
+  readonly socialHistory: SocialHistory;
+  readonly bootstrapResult: { imported: number; existing: number; rejected: number };
 
   constructor(options: ServerOptions) {
     this.answers = loadAnswers(options.rootDir);
@@ -451,6 +454,8 @@ export class Word5Service {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     initDb(this.db);
+    this.socialHistory = new SocialHistory(this.db);
+    this.bootstrapResult = this.socialHistory.bootstrap(join(options.rootDir, SOCIAL_HISTORY_SEED));
     this.relays = options.relays || [];
     this.gamestrRelays = options.gamestrRelays || ["wss://main.relay.gamestr.io"];
     this.secretKey = resolveSecretKey(options.word5Nsec);
@@ -538,19 +543,28 @@ export class Word5Service {
     const periodText = tagValue(event, "period");
     if (!parsed || !periodText || !/^\d+$/.test(periodText)) throw new Error("Missing public score period");
     const periodId = Number(periodText);
-    const row = this.db.query(`SELECT event_id AS eventId, result, hard_mode AS hardMode, published_at AS publishedAt
+    const row = this.db.query(`SELECT event_id AS eventId, result, hard_mode AS hardMode, published_at AS publishedAt,
+      public_event_id AS publicEventId
       FROM game_submissions WHERE pubkey=?1 AND period_id=?2 AND verified_completion=1`)
-      .get(event.pubkey, periodId) as { eventId: string; result: string; hardMode: number; publishedAt: string | null } | null;
+      .get(event.pubkey, periodId) as { eventId: string; result: string; hardMode: number; publishedAt: string | null; publicEventId: string | null } | null;
     if (!row || tagValue(event, "schema") !== "word5.score.v1" || parsed.puzzle !== periodId % 1000 ||
         parsed.date !== getDateForPeriod(periodId) || parsed.result !== row.result || parsed.hardMode !== Boolean(row.hardMode)) {
       throw new Error("Public post does not match a completed score");
     }
-    if (row.publishedAt) return { ok: true, published: true, eventId: event.id };
+    if (row.publishedAt) {
+      if (row.publicEventId === event.id) this.socialHistory.archive(event, "publication", this.relays);
+      return { ok: true, published: true, eventId: event.id };
+    }
     if (!this.relays.length) throw new Error("No score publication relays configured");
     const results = await publish(this.relays, [event]);
     if (!results.some((result) => result.status === "ok" || /duplicate|already exists/i.test(result.reason || ""))) {
       throw new Error("No relay confirmed the public post");
     }
+    const confirmedRelays = results.filter((result) => result.status === "ok" || /duplicate|already exists/i.test(result.reason || ""))
+      .map((result) => result.relay);
+    // The confirmed user event is social-history provenance whether or not this
+    // deployment has a server signer. Valid embedded stats are normalized by the archive.
+    this.socialHistory.archive(event, "publication", confirmedRelays);
     const update = this.db.query(`UPDATE game_submissions SET published_at=CURRENT_TIMESTAMP, public_event_id=?1
       WHERE pubkey=?2 AND period_id=?3 AND verified_completion=1 AND published_at IS NULL`)
       .run(event.id, event.pubkey, periodId);
@@ -565,8 +579,6 @@ export class Word5Service {
       const gamestr = buildGamestrScore({ event, parsed, periodId, date,
         points: SCORE_BY_RESULT[parsed.result]!, signedStats, secretKey: this.secretKey });
       this.db.transaction(() => {
-        this.db.query(`INSERT OR IGNORE INTO raw_events (event_id,pubkey,kind,created_at,event_json) VALUES (?1,?2,?3,?4,?5)`)
-          .run(event.id, event.pubkey, event.kind, event.created_at, JSON.stringify(event));
         this.db.query(`INSERT OR IGNORE INTO word5_attestations (event_id,user_event_id,event_json) VALUES (?1,?2,?3)`)
           .run(attestation!.id, event.id, JSON.stringify(attestation));
         if (repost) this.db.query(`INSERT OR IGNORE INTO reposts (event_id,user_event_id,event_json) VALUES (?1,?2,?3)`)

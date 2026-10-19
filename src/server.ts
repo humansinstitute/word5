@@ -24,6 +24,21 @@ const service = new Word5Service({
   relays: RELAYS,
   gamestrRelays: GAMESTR_RELAYS,
 });
+console.log(`Word5 social-history seed: ${service.bootstrapResult.imported} imported, ${service.bootstrapResult.existing} existing, ${service.bootstrapResult.rejected} rejected`);
+let socialHistoryCatchUp: Record<string, unknown> = { status: "pending" };
+let socialHistoryCatchUpRunning = false;
+async function catchUpSocialHistory() {
+  if (socialHistoryCatchUpRunning) return;
+  socialHistoryCatchUpRunning = true;
+  try {
+    socialHistoryCatchUp = { status: "ok", ...(await service.socialHistory.catchUp(RELAYS)), checkedAt: new Date().toISOString() };
+  } catch (error) {
+    socialHistoryCatchUp = { status: "error", error: error instanceof Error ? error.message : String(error), checkedAt: new Date().toISOString() };
+    console.warn("Word5 social-history catch-up failed:", socialHistoryCatchUp.error);
+  } finally { socialHistoryCatchUpRunning = false; }
+}
+setTimeout(() => void catchUpSocialHistory(), 1_000);
+setInterval(() => void catchUpSocialHistory(), 15 * 60 * 1000);
 const chat = new DailyChat(service);
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
 const scoreAnnouncer = new ScoreAnnouncer(service.db, service.secretKey, RELAYS);
@@ -108,7 +123,8 @@ const server = Bun.serve({
       // Page loads and API access also discard expired rooms for anonymous visitors.
       if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", scoreRecap: scoreAnnouncer.status() });
+        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", scoreRecap: scoreAnnouncer.status(),
+          socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
@@ -154,6 +170,22 @@ const server = Bun.serve({
         const days = Number(url.searchParams.get("days") || 7);
         if (days !== 1 && days !== 7 && days !== 21) throw new Error("days must be 1, 7 or 21");
         return json(service.scores(days, url.searchParams.get("published") === "true", Number(url.searchParams.get("limit") || 50)));
+      }
+      if (url.pathname === "/api/social-history" && req.method === "GET") {
+        const authorsText = url.searchParams.get("authors") || "";
+        const authors = authorsText ? authorsText.split(",").filter(Boolean) : [];
+        const parseInteger = (name: string) => {
+          const value = url.searchParams.get(name);
+          if (value === null) return undefined;
+          if (!/^\d+$/.test(value)) throw new Error(`${name} must be a non-negative integer`);
+          return Number(value);
+        };
+        return json(service.socialHistory.history({ authors, since: parseInteger("since"), until: parseInteger("until"), limit: parseInteger("limit") }));
+      }
+      if (url.pathname === "/api/top-streaks" && req.method === "GET") {
+        const limitText = url.searchParams.get("limit") || "50";
+        if (!/^\d+$/.test(limitText)) throw new Error("limit must be an integer");
+        return json(service.socialHistory.topStreaks(Number(limitText)));
       }
       if (url.pathname === "/api/leaderboard") {
         return json(service.leaderboard(Number(url.searchParams.get("limit") || 50)));

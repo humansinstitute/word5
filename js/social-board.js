@@ -305,6 +305,17 @@ function getWord5ResultScore(result) {
 }
 
 function parseWord5Event(event) {
+  if (event?.eventId && event?.pubkey && Number.isFinite(event?.createdAt) && event?.puzzle && event?.result) {
+    return {
+      eventId: event.eventId,
+      pubkey: event.pubkey,
+      puzzle: Number(event.puzzle),
+      result: String(event.result).toUpperCase(),
+      points: Number(event.points) || 0,
+      createdAt: Number(event.createdAt),
+      raw: event,
+    };
+  }
   if (!event?.content || !Array.isArray(event.tags)) return null;
 
   const tagMap = {};
@@ -347,7 +358,7 @@ function buildScoreMap(events, windowDays, allowedAuthors = null) {
   const latestByPuzzle = new Map();
 
   for (const event of events || []) {
-    if (event.created_at < cutoff) continue;
+    if (Number(event.created_at ?? event.createdAt) < cutoff) continue;
     if (allowedAuthors && !allowedAuthors.has(event.pubkey)) continue;
 
     const parsed = parseWord5Event(event);
@@ -372,6 +383,27 @@ function buildScoreMap(events, windowDays, allowedAuthors = null) {
   }
 
   return perUser;
+}
+
+async function fetchArchivedScoreHistory(authors, since, until, limit = 2000) {
+  const uniqueAuthors = [...new Set(authors || [])];
+  const chunks = uniqueAuthors.length
+    ? Array.from({ length: Math.ceil(uniqueAuthors.length / 20) }, (_, index) => uniqueAuthors.slice(index * 20, index * 20 + 20))
+    : [[]];
+  const windows = [];
+  for (let start = since; start <= until; start += 90 * 86400 + 1) {
+    windows.push([start, Math.min(until, start + 90 * 86400)]);
+  }
+  const batches = await Promise.all(chunks.flatMap((chunk) => windows.map(async ([windowSince, windowUntil]) => {
+    const params = new URLSearchParams({ since: String(windowSince), until: String(windowUntil), limit: String(limit) });
+    if (chunk.length) params.set("authors", chunk.join(","));
+    const response = await fetch(`api/social-history?${params}`);
+    if (!response.ok) throw new Error(`Social history API returned ${response.status}`);
+    const rows = (await response.json()).rows || [];
+    if (rows.length >= limit) throw new Error("Social history response reached its safety limit");
+    return rows;
+  })));
+  return [...new Map(batches.flat().map((row) => [row.eventId, row])).values()];
 }
 
 function buildPlayerSummary(pubkey, entries) {
@@ -751,12 +783,8 @@ async function subscribeToFollows() {
       return;
     }
 
-    const events = await pool.querySync(RELAYS, {
-      kinds: [1],
-      "#t": ["word5"],
-      authors: followPubkeys,
-      limit: 300,
-    });
+    const now = Math.floor(Date.now() / 1000);
+    const events = await fetchArchivedScoreHistory(followPubkeys, now - 400 * 86400, now);
 
     const recentScoreMap = buildScoreMap(
       events,
@@ -1342,12 +1370,10 @@ async function loadCompareView({ leftPubkey, rightPubkey, updateHistory = true }
   }
 
   try {
-    const events = await pool.querySync(RELAYS, {
-      kinds: [1],
-      "#t": ["word5"],
-      authors: [leftPubkey, rightPubkey],
-      limit: 240,
-    });
+    const now = Math.floor(Date.now() / 1000);
+    const events = await fetchArchivedScoreHistory(
+      [leftPubkey, rightPubkey], now - COMPARE_WINDOW_DAYS * 86400, now
+    );
 
     await loadProfiles([leftPubkey, rightPubkey]);
 
@@ -1420,7 +1446,8 @@ async function loadCompareView({ leftPubkey, rightPubkey, updateHistory = true }
 }
 
 function getTagValue(event, tagName) {
-  const tag = event.tags.find((candidate) => candidate[0] === tagName);
+  if (Number.isFinite(event?.[tagName])) return Number(event[tagName]);
+  const tag = event.tags?.find((candidate) => candidate[0] === tagName);
   return tag ? parseInt(tag[1], 10) || 0 : 0;
 }
 
@@ -1504,36 +1531,10 @@ async function subscribeToTop() {
   clearPosts();
 
   try {
-    const events = await pool.querySync(RELAYS, {
-      kinds: [1, 5555],
-      "#t": ["word5"],
-      limit: 500,
-    });
-
-    const latestCorrectionByUser = new Map();
-    for (const event of events) {
-      if (!isStatsCorrectionEvent(event)) continue;
-      const existing = latestCorrectionByUser.get(event.pubkey);
-      if (!existing || event.created_at > existing.created_at) {
-        latestCorrectionByUser.set(event.pubkey, event);
-      }
-    }
-
-    const bestByUser = new Map();
-    for (const event of events) {
-      const maxStreak = getTagValue(event, "maxStreak");
-      if (maxStreak <= 0) continue;
-
-      const correction = latestCorrectionByUser.get(event.pubkey);
-      if (!isPlausibleAfterCorrection(event, correction)) continue;
-
-      const existing = bestByUser.get(event.pubkey);
-      if (!existing || maxStreak > getTagValue(existing, "maxStreak")) {
-        bestByUser.set(event.pubkey, event);
-      }
-    }
-
-    await displayLeaderboard(Array.from(bestByUser.values()));
+    const response = await fetch("api/top-streaks?limit=50");
+    if (!response.ok) throw new Error(`Top streaks API returned ${response.status}`);
+    const { rows } = await response.json();
+    await displayLeaderboard(rows || []);
   } catch (e) {
     console.error("[Top] Error:", e);
     showEmptyState("Error loading leaderboard. Please try again.");
@@ -1701,6 +1702,7 @@ async function init() {
   // Expose shared utilities for league.js and other modules
   window.SocialBoard = {
     parseWord5Event,
+    fetchArchivedScoreHistory,
     SCORE_BY_RESULT,
     escapeHtml,
     renderAvatarHtml,

@@ -402,50 +402,23 @@
   }
 
   async function loadWeekScores(league, weekStart, weekEnd) {
-    const pool = getPool();
-    if (!pool) return [];
-
     const allMembers = [league.creator, ...league.members];
     const memberSet = new Set(allMembers);
 
-    // Cache first
-    let cached = await window.Word5Cache.getScoresForWindow(
-      Array.from(memberSet), weekStart, weekEnd
-    );
-
-    // Also fetch from relays
+    // Refresh score history from the server archive. League definitions,
+    // membership and leave records continue to sync directly from Nostr.
     try {
-      const events = await pool.querySync(getRelays(), {
-        kinds: [1],
-        "#t": ["word5"],
-        authors: Array.from(memberSet),
-        since: weekStart,
-        until: weekEnd + 1,
-        limit: 500,
-      });
+      const events = await sb().fetchArchivedScoreHistory(
+        Array.from(memberSet), weekStart, weekEnd + 1, 2000
+      );
 
       const parseWord5Event = sb().parseWord5Event;
-      if (parseWord5Event && events?.length) {
-        const scores = [];
-        for (const ev of events) {
-          const parsed = parseWord5Event(ev);
-          if (parsed) {
-            scores.push(parsed);
-          }
-        }
-        if (scores.length) {
-          await window.Word5Cache.putScores(scores);
-        }
-        // Re-read from cache for deduped results
-        cached = await window.Word5Cache.getScoresForWindow(
-          Array.from(memberSet), weekStart, weekEnd
-        );
-      }
+      if (!parseWord5Event) return [];
+      return (events || []).map(parseWord5Event).filter((score) => score && score.createdAt >= weekStart && score.createdAt <= weekEnd);
     } catch (e) {
-      console.log("[League] Relay score fetch error:", e);
+      console.log("[League] Server score-history fetch error:", e);
+      return [];
     }
-
-    return cached;
   }
 
   function buildWeeklyScoreboard(league, scores) {
