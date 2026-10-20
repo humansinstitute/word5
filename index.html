@@ -662,13 +662,23 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Encrypted Sync</div>
+            <div id="playerSyncStatus" class="toggle-sublabel" aria-live="polite">Off · this browser only</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="playerSyncToggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
         <div id="nostrAvatarLabel" class="avatar-label">Session: loading…</div>
         <button id="loginNostrBtn" class="nostr-btn" style="background:#9333ea;">Login Nostr</button>
         <button id="profileOpenBtn" class="nostr-btn">My Profile</button>
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
-        <div class="app-version">Version 20260916-2</div>
+        <div class="app-version">Version 20261020-1</div>
       </div>
     </div>
     <div class="title">WORD5<span id="hardModeIndicator" class="hard-mode-indicator" style="display:none;">*</span></div>
@@ -803,6 +813,8 @@
   <script src="js/visit-tracker.js?v=20260930-1"></script>
   <script src="js/nostr-signers.js?v=20260916-2"></script>
   <script src="js/nostr-post.js?v=20260916-2"></script>
+  <script src="js/player-sync.js?v=20261020-1"></script>
+  <script src="js/player-sync-browser.js?v=20261020-1"></script>
   <script src="js/nostr-ui.js?v=20260916-2"></script>
   <script src="js/chat-crypto.js?v=20261005-2"></script>
   <script src="js/daily-chat.js?v=20261005-3"></script>
@@ -886,6 +898,7 @@
     // Game state
     let _nostrSyncPromise = null;
     let recordCompletedScore = async () => null;
+    let word5Sync = null;
 
     let state = {
       targetWord: '',
@@ -897,6 +910,8 @@
       periodId: 0,
       lastCompletedPuzzle: 0,
       hardMode: false,
+      settingsUpdatedAt: 0,
+      gameUpdatedAt: 0,
       stats: {
         played: 0,
         won: 0,
@@ -1246,6 +1261,7 @@
       const guessSubmittedAt = Math.floor(Date.now() / 1000);
       state.guesses.push(guess);
       state.currentGuess = '';
+      state.gameUpdatedAt = Date.now();
 
       // Lock hard mode toggle after first guess
       window.updateHardModeToggleState();
@@ -1296,6 +1312,7 @@
           setTimeout(() => showResult(), 500);
         } else {
           saveState();
+          word5Sync?.checkpointGame(state.periodId, state.guesses, state.hardMode, state.gameUpdatedAt, false);
         }
       }, WORD_LENGTH * 300 + 300);
     }
@@ -1405,6 +1422,8 @@
         won: state.won,
         completedAt: state.completedAt,
         hardMode: state.hardMode,
+        settingsUpdatedAt: state.settingsUpdatedAt,
+        gameUpdatedAt: state.gameUpdatedAt,
         stats: state.stats
       };
       localStorage.setItem('words-game', JSON.stringify(saveData));
@@ -1423,6 +1442,7 @@
           }
           // Hard mode persists across sessions
           state.hardMode = data.hardMode || false;
+          state.settingsUpdatedAt = Number(data.settingsUpdatedAt) || 0;
 
           // Check if it's the same period
           if (data.periodId === state.periodId) {
@@ -1430,6 +1450,7 @@
             state.gameOver = data.gameOver || false;
             state.won = data.won || false;
             state.completedAt = Number(data.completedAt) || 0;
+            state.gameUpdatedAt = Number(data.gameUpdatedAt) || 0;
           }
         } catch (e) {
           console.error('Failed to load state:', e);
@@ -1690,9 +1711,50 @@
           return;
         }
         state.hardMode = hardModeToggle.checked;
+        state.settingsUpdatedAt = Date.now();
         saveState();
+        word5Sync?.checkpointSettings(state.hardMode, state.settingsUpdatedAt);
         showToast(state.hardMode ? 'Hard mode ON' : 'Hard mode OFF');
       });
+
+      const playerSyncToggle = document.getElementById('playerSyncToggle');
+      const playerSyncStatus = document.getElementById('playerSyncStatus');
+      const updateSyncStatus = (detail) => {
+        playerSyncToggle.checked = Boolean(detail.enabled);
+        playerSyncStatus.textContent = detail.message || 'Encrypted sync is off';
+        playerSyncStatus.style.color = ['error', 'unsupported', 'partial'].includes(detail.state) ? '#f97316' : '';
+      };
+      async function setupPlayerSync() {
+        try {
+          word5Sync?.dispose?.();
+          word5Sync = await window.Word5PlayerSyncBrowser.create({
+            getLocalState: () => ({ periodId: state.periodId, guesses: [...state.guesses], gameOver: state.gameOver,
+              hardMode: state.hardMode, settingsUpdatedAt: state.settingsUpdatedAt, gameUpdatedAt: state.gameUpdatedAt }),
+            applySettings: (preferences, updatedAt) => {
+              if (state.guesses.length === 0 && !state.gameOver) state.hardMode = preferences.hardMode;
+              state.settingsUpdatedAt = updatedAt;
+              saveState(); window.updateHardModeToggleState();
+            },
+            applyGame: (remote, updatedAt) => {
+              if (state.gameOver) return;
+              state.guesses = [...remote.guesses]; state.currentGuess = ''; state.hardMode = remote.hardMode;
+              state.gameUpdatedAt = updatedAt; saveState(); updateBoard(); updateKeyboard(); window.updateHardModeToggleState();
+            },
+            onStatus: updateSyncStatus,
+          });
+          await word5Sync.init();
+        } catch (error) { updateSyncStatus({ state: 'error', enabled: false, message: error.message || String(error) }); }
+      }
+      playerSyncToggle.addEventListener('change', async () => {
+        playerSyncToggle.disabled = true;
+        try {
+          if (playerSyncToggle.checked) await word5Sync.enable();
+          else word5Sync.disable();
+        } catch (_) { playerSyncToggle.checked = false; }
+        finally { playerSyncToggle.disabled = false; }
+      });
+      await setupPlayerSync();
+      window.addEventListener('player-ready', () => { void setupPlayerSync(); });
 
       // Background sync stats from Nostr (store promise so win handler can await it)
       _nostrSyncPromise = syncStatsFromNostr();

@@ -17,11 +17,11 @@ const server=Bun.serve({port:0,async fetch(req){const url=new URL(req.url);try {
  if(url.pathname==='/api/completion') return Response.json(service.complete((await req.json()).event));
  if(url.pathname.startsWith('/api/')) return Response.json({ok:true,games:[],rows:[]});
  const path=url.pathname==='/'?'index.html':url.pathname.slice(1);
- const file=Bun.file(join(path.startsWith('assets/')?dir:root,path));
+ const file=Bun.file(join(path==='assets/answers.txt'||path==='assets/wla.txt'?dir:root,path));
  return new Response(file,{headers:{'content-type':path.endsWith('.js')?'text/javascript':path.endsWith('.html')?'text/html':'text/plain'}});
  } catch(error) { return Response.json({ok:false,error:(error as Error).message},{status:400}); }
 }});
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,...(process.env.WORD5_BROWSER_EXECUTABLE?{executablePath:process.env.WORD5_BROWSER_EXECUTABLE}:{})});
 const errors:string[]=[];
 try {
  for(const loss of [false,true]) {
@@ -114,6 +114,7 @@ try {
   await page.waitForTimeout(10500);
   if(await page.evaluate(()=>document.getElementById('chatHistory')!.scrollTop)>5) throw new Error('Polling interrupted reading older messages');
   await page.setViewportSize({width:320,height:400});
+  await page.waitForTimeout(250);
   const composerBottom=await page.locator('#chatText').evaluate(el=>el.getBoundingClientRect().bottom);
   if(composerBottom>400) throw new Error('Composer hidden in short keyboard viewport');
   await page.setViewportSize({width:320,height:667});

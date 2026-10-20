@@ -97,6 +97,7 @@
   window.NostrPost = {
     publishScore,
     DEFAULT_RELAYS,
+    STORAGE_RELAYS: DEFAULT_RELAYS,
     formatScoreContent: ({ score, baseUrl }) => {
       const safeBase =
         baseUrl ||

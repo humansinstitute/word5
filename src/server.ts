@@ -5,6 +5,7 @@ import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
 import { VisitAnnouncer } from "./visit-announcements";
 import { ScoreAnnouncer, startScoreAnnouncements } from "./score-announcements";
+import { PublicDataPublisher, startPublicDataPublisher } from "./public-data";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const PORT = Number(process.env.PORT || 41005);
@@ -43,6 +44,9 @@ const chat = new DailyChat(service);
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
 const scoreAnnouncer = new ScoreAnnouncer(service.db, service.secretKey, RELAYS);
 startScoreAnnouncements(scoreAnnouncer);
+const publicDataPublisher = new PublicDataPublisher(service.db, service.secretKey, RELAYS,
+  service.socialHistory, service.relayOutbox);
+startPublicDataPublisher(publicDataPublisher);
 const visitAnnouncer = new VisitAnnouncer(service.db, service.secretKey, RELAYS);
 async function announceCompletedGame() {
   try {
@@ -124,6 +128,7 @@ const server = Bun.serve({
       if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
         return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", scoreRecap: scoreAnnouncer.status(),
+          publicData: publicDataPublisher.status(),
           socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
       }
       if (url.pathname === "/api/day") {
@@ -162,6 +167,9 @@ const server = Bun.serve({
       }
       if (url.pathname === "/api/completion" && req.method === "POST") {
         return json(service.complete((await readJson(req))?.event));
+      }
+      if (url.pathname === "/api/completion/status" && req.method === "POST") {
+        return json(service.completionStatus((await readJson(req))?.event));
       }
       if (url.pathname === "/api/publication" && req.method === "POST") {
         return json(await service.markPublished((await readJson(req))?.event));

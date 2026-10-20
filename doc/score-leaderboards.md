@@ -1,5 +1,7 @@
 # Completion scores and Top Scores
 
+The public kind-30763 snapshot contract and encrypted player-state sync are documented in [nostr-public-data-and-player-sync.md](nostr-public-data-and-player-sync.md).
+
 Word5 records a signed-in player's completed puzzle through `POST /api/completion`. The client signs a private Nostr kind 30078 event with schema `word5.completion.v1`. Its JSON content contains the game name, full UTC period ID, puzzle number, date, result, hard mode flag, and ordered guesses. The client sends this event only to the Word5 server and keeps it in local storage for retries. It is never passed to the relay publisher. Signed-out games remain playable but cannot enter the score board. The app automatically creates an anonymous local session key for visitors; that key is not treated as a signed-in identity. An extension, bunker, or imported nsec is required for ranked scores.
 
 The server verifies the event signature and checks that the signed period matches its creation time and the current UTC puzzle period. It permits the previous period only for two minutes after rollover when the event was signed during that period. It checks every guess against the same answer and valid-word lists used by the game, rejects play after a correct guess, and recomputes the result and points. A signature binds a submission to a pubkey but cannot prove that the player solved the puzzle unaided. The first accepted event for a pubkey and period is immutable; a retry with the same event ID is idempotent.

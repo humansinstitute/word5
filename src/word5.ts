@@ -13,6 +13,7 @@ import {
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SOCIAL_HISTORY_SEED, SocialHistory } from "./social-history";
+import { RelayOutbox } from "./relay-outbox";
 
 const WORD_LENGTH = 5;
 const MAX_GUESSES = 6;
@@ -444,6 +445,7 @@ export class Word5Service {
   readonly secretKey: Uint8Array | null;
   readonly validWords: Set<string>;
   readonly socialHistory: SocialHistory;
+  readonly relayOutbox: RelayOutbox;
   readonly bootstrapResult: { imported: number; existing: number; rejected: number };
 
   constructor(options: ServerOptions) {
@@ -455,10 +457,20 @@ export class Word5Service {
     this.db = new Database(dbPath);
     initDb(this.db);
     this.socialHistory = new SocialHistory(this.db);
+    this.relayOutbox = new RelayOutbox(this.db);
     this.bootstrapResult = this.socialHistory.bootstrap(join(options.rootDir, SOCIAL_HISTORY_SEED));
     this.relays = options.relays || [];
     this.gamestrRelays = options.gamestrRelays || ["wss://main.relay.gamestr.io"];
     this.secretKey = resolveSecretKey(options.word5Nsec);
+    const gamestrTargets = [...new Set([...this.relays, ...this.gamestrRelays])];
+    const existingGamestr = this.db.query("SELECT event_json AS eventJson FROM gamestr_scores").all() as Array<{ eventJson: string }>;
+    for (const row of existingGamestr) {
+      try {
+        const event = JSON.parse(row.eventJson) as Event;
+        this.relayOutbox.enqueue(event, gamestrTargets, "gamestr-score",
+          `30762:${event.pubkey}:${tagValue(event, "d")}`);
+      } catch { /* Preserve unreadable legacy rows for operator inspection. */ }
+    }
   }
 
   getDay(now = Date.now()) {
@@ -535,6 +547,23 @@ export class Word5Service {
     return { ok: true, submission: row };
   }
 
+  completionStatus(event: Event, now = Date.now()) {
+    if (!event || !validateEvent(event) || !verifyEvent(event) || getEventHash(event) !== event.id ||
+        event.kind !== 30078 || tagValue(event, "schema") !== "word5.sync-status.v1") {
+      throw new Error("Invalid signed sync status request");
+    }
+    if (Math.abs(Math.floor(now / 1000) - event.created_at) > 300) throw new Error("Sync status request expired");
+    let body: Record<string, unknown>;
+    try { body = JSON.parse(event.content); } catch { throw new Error("Malformed sync status request"); }
+    if (!body || Object.keys(body).sort().join(",") !== "periodId" || !Number.isSafeInteger(body.periodId)) {
+      throw new Error("Malformed sync status request");
+    }
+    const periodId = Number(body.periodId);
+    const row = this.db.query(`SELECT 1 AS completed FROM game_submissions
+      WHERE pubkey=?1 AND period_id=?2 AND verified_completion=1`).get(event.pubkey, periodId) as { completed: number } | null;
+    return { ok: true, periodId, completed: Boolean(row) };
+  }
+
   async markPublished(event: Event, publish = publishEvents) {
     if (!event || !validateEvent(event) || !verifyEvent(event) || getEventHash(event) !== event.id || event.kind !== 1) {
       throw new Error("Invalid signed public Word5 post");
@@ -588,9 +617,12 @@ export class Word5Service {
         if (signedStats) this.db.query(`INSERT OR IGNORE INTO player_stats_snapshots (event_id,pubkey,period_id,stats_json) VALUES (?1,?2,?3,?4)`)
           .run(event.id, event.pubkey, periodId, JSON.stringify(signedStats));
       })();
+      const gamestrTargets = [...new Set([...this.relays, ...this.gamestrRelays])];
+      this.relayOutbox.enqueue(gamestr, gamestrTargets, "gamestr-score", `30762:${gamestr.pubkey}:${tagValue(gamestr, "d")}`);
       try {
         await publish(this.relays, [attestation, ...(repost ? [repost] : [])]);
-        await publish(this.gamestrRelays, [gamestr]);
+        const gamestrResults = await publish(gamestrTargets, [gamestr]);
+        this.relayOutbox.record(gamestr.id, gamestrResults);
       } catch (error) {
         console.warn("Word5 public score relay side effect failed:", error);
       }
@@ -713,8 +745,11 @@ export class Word5Service {
 
     const word5Publishable = [attestation, repost].filter(Boolean) as Event[];
     const gamestrPublishable = [gamestrScore].filter(Boolean) as Event[];
+    if (gamestrScore) this.relayOutbox.enqueue(gamestrScore, gamestrRelayList, "gamestr-score",
+      `30762:${gamestrScore.pubkey}:${tagValue(gamestrScore, "d")}`);
     const word5RelayResults = await publishEvents(relayList, word5Publishable);
     const gamestrRelayResults = await publishEvents(gamestrRelayList, gamestrPublishable);
+    if (gamestrScore) this.relayOutbox.record(gamestrScore.id, gamestrRelayResults);
     const relayResults = [...word5RelayResults, ...gamestrRelayResults];
     if (relayResults.length) {
       const insertRelay = this.db.query(`

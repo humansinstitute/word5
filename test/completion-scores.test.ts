@@ -80,6 +80,18 @@ describe("private completion scores", () => {
     expect(service.scores(1, false, 50, now).rows[0]?.points).toBe(7);
   });
 
+  test("signed sync status exposes only whether that same player completed the period", () => {
+    const { service } = fixture();
+    const secret = player();
+    service.complete(completion(service, secret, period), now);
+    const request = (key: Uint8Array, createdAt = Math.floor(now / 1000)) => finalizeEvent({ kind: 30078, created_at: createdAt,
+      tags: [["schema", "word5.sync-status.v1"]], content: JSON.stringify({ periodId: period }) }, key);
+    expect(service.completionStatus(request(secret), now)).toEqual({ ok: true, periodId: period, completed: true });
+    expect(service.completionStatus(request(player()), now)).toEqual({ ok: true, periodId: period, completed: false });
+    expect(() => service.completionStatus(request(secret, Math.floor(now / 1000) - 301), now)).toThrow("expired");
+    expect(JSON.stringify(service.completionStatus(request(secret), now))).not.toContain("guesses");
+  });
+
   test("a matching legacy row can be upgraded by a signed completion", () => {
     const { service } = fixture();
     const secret = player();
