@@ -3,6 +3,7 @@
 apps/logs/
 node_modules/
 .env
+ecosystem.config.cjs
 *.log
 data/
 *.sqlite
