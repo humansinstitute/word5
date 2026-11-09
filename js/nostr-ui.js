@@ -1681,7 +1681,7 @@
   }
 
   // --- Donate modal ---
-  const LIGHTNING_ADDRESS = "thegoodstuff@getalby.com";
+  const LIGHTNING_ADDRESS = "skilledopinion918@walletofsatoshi.com";
   const LIGHTNING_URI = `lightning:${LIGHTNING_ADDRESS}`;
 
   function ensureDonateModal() {
