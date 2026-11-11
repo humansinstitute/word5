@@ -190,6 +190,9 @@ const server = Bun.serve({
         };
         return json(service.socialHistory.history({ authors, since: parseInteger("since"), until: parseInteger("until"), limit: parseInteger("limit") }));
       }
+      if (url.pathname === "/api/player-history" && req.method === "GET") {
+        return json(service.playerHistory(url.searchParams.get("pubkey") || ""));
+      }
       if (url.pathname === "/api/top-streaks" && req.method === "GET") {
         const limitText = url.searchParams.get("limit") || "50";
         if (!/^\d+$/.test(limitText)) throw new Error("limit must be an integer");

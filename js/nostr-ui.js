@@ -405,44 +405,13 @@
   }
 
   async function reconstructWord5Stats(pubkey) {
-    const events = await fetchWord5History(pubkey);
-    const parsed = (events || []).map(parseWord5Event).filter(Boolean);
-    const entries = dedupeWord5Entries(parsed);
-    const summary = buildWord5Stats(entries);
-    const correction = (events || [])
-      .map(parseWord5StatsCorrection)
-      .filter(Boolean)
-      .sort((a, b) => b.created_at - a.created_at)[0] || null;
-    if (!summary) {
-      return {
-        stats: correction?.stats || null,
-        entries: [],
-        meta: {
-          totalEvents: events?.length || 0,
-          uniqueGames: 0,
-          trailingWinRun: 0,
-          hoursSinceLastPost: Number.POSITIVE_INFINITY,
-          streakExpired: true,
-          firstPlayedAt: 0,
-          lastPlayedAt: 0,
-          lastPuzzle: 0,
-          hasCorrection: Boolean(correction),
-        },
-      };
-    }
-    const correctedStats = correction
-      ? applyCorrectionBaseline(correction, entries)
-      : null;
-    return {
-      stats: correctedStats || summary.stats,
-      entries,
-      meta: {
-        ...summary.meta,
-        totalEvents: events?.length || 0,
-        hasCorrection: Boolean(correction),
-        usedTaggedStats: false,
-      },
-    };
+    const response = await fetch(`api/player-history?pubkey=${encodeURIComponent(pubkey)}`, { cache: "no-store", signal: AbortSignal.timeout(10000) });
+    const report = await response.json();
+    if (!response.ok || !report.ok || report.pubkey !== pubkey) throw new Error(report.error || "Server history unavailable");
+    if (getIdentityPubkey(window.NostrSession?.getPlayer()) !== pubkey) throw new Error("Account changed while restoring history; retry for this account");
+    return { stats: report.stats, entries: [], meta: { pubkey, lastPeriodId: report.lastPeriodId, lastPuzzle: report.lastPuzzle,
+      uniqueGames: report.historyCount, totalEvents: report.historyCount, hasCorrection: Boolean(report.correctionEventId),
+      source: "server-archive", lastPlayedAt: report.lastPeriodId === null ? 0 : report.lastPeriodId * 86400 } };
   }
 
   function readPersistedWord5Stats() {
@@ -462,6 +431,7 @@
 
   function persistWord5Stats(stats, meta = null) {
     if (!stats) return;
+    if (meta?.pubkey && getIdentityPubkey(window.NostrSession?.getPlayer()) !== meta.pubkey) return;
     if (window.Word5App?.applyRepairedStats) {
       window.Word5App.applyRepairedStats(stats, meta);
       return;
@@ -840,6 +810,10 @@
           <button id="loginChooserClose" class="nostr-btn" type="button" style="width:auto;padding:8px 12px;margin:0;">Close</button>
         </div>
         <div style="font-size:13px;color:#818384;margin-bottom:14px;">Choose how to connect your Nostr identity</div>
+        <button id="loginOptAmber" class="nostr-btn" type="button" style="text-align:left;padding:14px 12px;">
+          <div style="font-weight:600;font-size:14px;color:#fff;">Login - Amber (Android)</div>
+          <div style="font-size:11px;color:#818384;margin-top:2px;">Open Amber with NIP-55 · keep your key in the signer</div>
+        </button>
         <button id="loginOptExtension" class="nostr-btn" type="button" style="text-align:left;padding:14px 12px;">
           <div style="font-weight:600;font-size:14px;color:#fff;">Login - Browser Extension</div>
           <div style="font-size:11px;color:#818384;margin-top:2px;">Use NIP-07 signer (Alby, nos2x, etc.)</div>
@@ -927,6 +901,9 @@
     // Login chooser bindings
     $("loginChooserClose")?.addEventListener("click", () => closeLoginChooser());
     loginChooser.addEventListener("click", (e) => { if (e.target === loginChooser) closeLoginChooser(); });
+    $("loginOptAmber")?.addEventListener("click", () => {
+      closeLoginChooser(); window.AmberSigner.login();
+    });
     $("loginOptExtension")?.addEventListener("click", async () => {
       closeLoginChooser();
       await loginWithNostr();
@@ -1285,6 +1262,7 @@
       const signer = await window.NostrSigners.getActiveSigner();
       const pubkey = state.profilePubkey || (await signer.getPublicKey());
       const report = await reconstructWord5Stats(pubkey);
+      if (getIdentityPubkey(window.NostrSession?.getPlayer()) !== pubkey) throw new Error("Account changed; retry repair for the active account");
       if (!report.stats) {
         repairStatus.textContent = `No signed WORD5 posts found since ${WORD5_REPAIR_SINCE_LABEL}.`;
         return;
@@ -1397,7 +1375,9 @@
       toggle.textContent = state.revealed ? "🙈" : "👁";
     } else {
       nsecEl.textContent =
-        player?.auth_mode === "nip07"
+        player?.auth_mode === "amber"
+          ? "Amber signer connected; private key stays in Amber."
+          : player?.auth_mode === "nip07"
           ? "Using NIP-07 signer; session nsec hidden."
           : player?.auth_mode === "bunker"
             ? "Using bunker signer; session nsec hidden."
@@ -1405,7 +1385,9 @@
       toggle.style.display = "none";
     }
     note.textContent =
-      player?.auth_mode === "nip07"
+      player?.auth_mode === "amber"
+          ? "Amber signer connected; private key stays in Amber."
+          : player?.auth_mode === "nip07"
         ? "Extension signs events. Session key is fallback only."
         : player?.auth_mode === "bunker"
           ? "Remote bunker signs events. Session key is fallback only."
@@ -1416,7 +1398,9 @@
     const bubble = $("nostrAvatarBubble");
     const label = $("nostrAvatarLabel");
     const mode =
-      player?.auth_mode === "nip07"
+      player?.auth_mode === "amber"
+          ? "Amber"
+          : player?.auth_mode === "nip07"
         ? "NIP-07"
         : player?.auth_mode === "bunker"
           ? "Bunker"

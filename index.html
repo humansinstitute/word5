@@ -739,6 +739,7 @@
         <button id="postNostrBtn">Post to Nostr</button>
       </div>
       <div id="postStatus" style="margin-top:8px; font-size:12px; color:#818384;"></div>
+      <button id="retryScoreBtn" class="nostr-btn" type="button">Retry score / restore history</button>
       <div id="scoreStatus" aria-live="polite" style="margin-top:6px; font-size:12px; color:#818384;"></div>
     </div>
   </div>
@@ -809,13 +810,14 @@
     </div>
   </div>
 
-  <script src="js/nostr-session.js?v=20260916-2"></script>
+  <script src="js/amber-signer.js?v=20261111-1"></script>
+  <script src="js/nostr-session.js?v=20261111-1"></script>
   <script src="js/visit-tracker.js?v=20260930-1"></script>
-  <script src="js/nostr-signers.js?v=20260916-2"></script>
+  <script src="js/nostr-signers.js?v=20261111-1"></script>
   <script src="js/nostr-post.js?v=20260916-2"></script>
   <script src="js/player-sync.js?v=20261020-1"></script>
   <script src="js/player-sync-browser.js?v=20261020-1"></script>
-  <script src="js/nostr-ui.js?v=20261109-1"></script>
+  <script src="js/nostr-ui.js?v=20261111-1"></script>
   <script src="js/chat-crypto.js?v=20261005-2"></script>
   <script src="js/daily-chat.js?v=20261005-3"></script>
   <script>
@@ -899,6 +901,8 @@
     let _nostrSyncPromise = null;
     let recordCompletedScore = async () => null;
     let word5Sync = null;
+    let gameOwner = null;
+    let historyRevision = 0;
 
     let state = {
       targetWord: '',
@@ -909,6 +913,7 @@
       completedAt: 0,
       periodId: 0,
       lastCompletedPuzzle: 0,
+      lastPeriodId: null,
       hardMode: false,
       settingsUpdatedAt: 0,
       gameUpdatedAt: 0,
@@ -1214,7 +1219,7 @@
 
     // Handle key press
     function handleKey(key) {
-      if (state.gameOver) return;
+      if (state.gameOver || state.revealing) return;
 
       if (key === 'ENTER') {
         submitGuess();
@@ -1257,6 +1262,9 @@
         return;
       }
 
+      const guessOwner = gameOwner;
+      const guessPeriod = state.periodId;
+      state.revealing = true;
       const guess = state.currentGuess;
       const guessSubmittedAt = Math.floor(Date.now() / 1000);
       state.guesses.push(guess);
@@ -1292,6 +1300,9 @@
           try { await _nostrSyncPromise; } catch (_) {}
           _nostrSyncPromise = null;
         }
+
+        state.revealing = false;
+        if (guessOwner !== gameOwner || guessPeriod !== state.periodId || state.serverCompleted) return;
 
         // Check win/lose
         if (guess === state.targetWord) {
@@ -1335,6 +1346,8 @@
 
     function applyRepairedStats(nextStats, meta = null) {
       if (!nextStats || typeof nextStats !== 'object') return;
+      if (meta?.pubkey && meta.pubkey !== gameOwner) return;
+      if (Number.isSafeInteger(meta?.lastPeriodId)) state.lastPeriodId = meta.lastPeriodId;
       state.stats = {
         played: Number(nextStats.played) || 0,
         won: Number(nextStats.won) || 0,
@@ -1355,7 +1368,7 @@
 
     function updateStatsForCompletedGame(won) {
       const completedPuzzle = state.periodId % 1000;
-      const continuesStreak = isNextWord5Puzzle(state.lastCompletedPuzzle, completedPuzzle);
+      const continuesStreak = Number.isSafeInteger(state.lastPeriodId) && state.periodId === state.lastPeriodId + 1;
 
       state.stats.played++;
       if (won) {
@@ -1366,6 +1379,7 @@
         state.stats.streak = 0;
       }
       state.lastCompletedPuzzle = completedPuzzle;
+      state.lastPeriodId = state.periodId;
     }
 
     window.Word5App = {
@@ -1377,9 +1391,10 @@
       localStorage.setItem('word5-result-display-count', String(resultDisplayCount));
 
       if (state.won) {
+        const resultCount = Number(state.serverResult) || state.guesses.length;
         const messages = ['Genius!', 'Magnificent!', 'Impressive!', 'Splendid!', 'Great!', 'Phew!'];
-        modalTitle.textContent = messages[state.guesses.length - 1] || 'You Won!';
-        modalMessage.textContent = `You got it in ${state.guesses.length} ${state.guesses.length === 1 ? 'guess' : 'guesses'}!`;
+        modalTitle.textContent = messages[resultCount - 1] || 'You Won!';
+        modalMessage.textContent = `You got it in ${resultCount} ${resultCount === 1 ? 'guess' : 'guesses'}!`;
       } else {
         modalTitle.textContent = 'Better luck next time!';
         modalMessage.textContent = 'The word was:';
@@ -1396,7 +1411,7 @@
     function generateShareText() {
       const periodNum = state.periodId % 1000;
       const hardModeStr = state.hardMode ? '*' : '';
-      let text = `WORD5 #${periodNum} ${state.won ? state.guesses.length : 'X'}/${MAX_GUESSES}${hardModeStr}${state.hardMode ? ' (Hard Mode)' : ''}\n\n`;
+      let text = `WORD5 #${periodNum} ${state.won ? (state.serverResult || state.guesses.length) : 'X'}/${MAX_GUESSES}${hardModeStr}${state.hardMode ? ' (Hard Mode)' : ''}\n\n`;
 
       state.guesses.forEach(guess => {
         const result = evaluateGuess(guess);
@@ -1415,8 +1430,12 @@
     // Save state to localStorage
     function saveState() {
       const saveData = {
+        owner: gameOwner,
+        serverCompleted: Boolean(state.serverCompleted),
+        serverResult: state.serverResult || null,
         periodId: state.periodId,
         lastCompletedPuzzle: state.lastCompletedPuzzle,
+        lastPeriodId: state.lastPeriodId,
         guesses: state.guesses,
         gameOver: state.gameOver,
         won: state.won,
@@ -1427,16 +1446,28 @@
         stats: state.stats
       };
       localStorage.setItem('words-game', JSON.stringify(saveData));
+      if (gameOwner) localStorage.setItem(`words-game:${gameOwner}`, JSON.stringify(saveData));
     }
 
     // Load state from localStorage
     function loadState() {
-      const saved = localStorage.getItem('words-game');
+      let legacy = null;
+      try { legacy = JSON.parse(localStorage.getItem('words-game') || 'null'); } catch (_) {}
+      // Retain the pre-migration browser snapshot even when authoritative totals differ.
+      if (legacy && !localStorage.getItem('word5-legacy-state-v1')) {
+        localStorage.setItem('word5-legacy-state-v1', JSON.stringify(legacy));
+      }
+      const saved = localStorage.getItem(`words-game:${gameOwner}`) ||
+        ((!legacy?.owner || legacy.owner === gameOwner) ? JSON.stringify(legacy) : null);
       if (saved) {
         try {
           const data = JSON.parse(saved);
           state.stats = data.stats || state.stats;
           state.lastCompletedPuzzle = Number(data.lastCompletedPuzzle) || 0;
+          // Old modulo-only caches cannot prove the age of a streak. Keep their totals,
+          // but require an absolute period before continuing the active run offline.
+          state.lastPeriodId = Number.isSafeInteger(data.lastPeriodId) ? data.lastPeriodId :
+            (data.gameOver && Number.isSafeInteger(data.periodId) ? data.periodId : null);
           if (!state.lastCompletedPuzzle && data.gameOver && data.periodId) {
             state.lastCompletedPuzzle = data.periodId % 1000;
           }
@@ -1446,6 +1477,8 @@
 
           // Check if it's the same period
           if (data.periodId === state.periodId) {
+            state.serverCompleted = Boolean(data.serverCompleted);
+            state.serverResult = data.serverResult || null;
             state.guesses = data.guesses || [];
             state.gameOver = data.gameOver || false;
             state.won = data.won || false;
@@ -1458,211 +1491,58 @@
       }
     }
 
-    // Background sync stats from Nostr (runs silently, doesn't block UI)
+    // The archive is authoritative; never merge another browser's cached counters.
     async function syncStatsFromNostr() {
-      console.log('[Nostr Sync] Starting background sync...');
+      const revision = ++historyRevision;
+      const pubkey = gameOwner;
       try {
-        // Wait for NostrSession to be ready
-        if (window.NostrSigners?.ready) {
-          await window.NostrSigners.ready();
+        const response = await fetch(`api/player-history?pubkey=${encodeURIComponent(pubkey)}`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+        const report = await response.json();
+        if (!response.ok || !report.ok || report.pubkey !== pubkey || report.periodId !== state.periodId) throw new Error(report.error || 'Server history unavailable');
+        if (revision !== historyRevision || pubkey !== gameOwner) return;
+        state.stats = { ...report.stats };
+        state.lastCompletedPuzzle = report.lastPuzzle;
+        state.lastPeriodId = report.lastPeriodId;
+        const wasGameOver = state.gameOver;
+        state.serverCompleted = report.completed;
+        state.serverResult = report.currentResult;
+        if (report.completed) {
+          state.gameOver = true; state.won = report.currentResult !== 'X';
+        } else if (state.gameOver) {
+          // A locally completed score awaiting signature/upload is counted once over the server baseline.
+          updateStatsForCompletedGame(state.won);
         }
-
-        if (!window.NostrSigners) {
-          console.log('[Nostr Sync] NostrSigners not available');
-          return;
-        }
-
-        const signer = await window.NostrSigners.getActiveSigner();
-        const pubkey = await signer.getPublicKey();
-        console.log('[Nostr Sync] Got pubkey:', pubkey.slice(0, 12) + '...');
-
-        if (window.NostrUI?.reconstructWord5Stats) {
-          const report = await window.NostrUI.reconstructWord5Stats(pubkey);
-          if (!report.stats) {
-            console.log('[Nostr Sync] No reconstructable stats found');
-            return;
-          }
-
-          const currentPuzzle = state.periodId % 1000;
-          const lastPuzzle = Number(report.meta?.lastPuzzle) || 0;
-          const puzzleDiff = lastPuzzle
-            ? (currentPuzzle - lastPuzzle + 1000) % 1000
-            : Number.POSITIVE_INFINITY;
-          const reconstructedStreak = puzzleDiff <= 1
-            ? Number(report.stats.streak) || 0
-            : 0;
-          const nextStats = {
-            played: Math.max(state.stats.played, Number(report.stats.played) || 0),
-            won: Math.max(state.stats.won, Number(report.stats.won) || 0),
-            streak: reconstructedStreak,
-            maxStreak: report.meta?.hasCorrection
-              ? Number(report.stats.maxStreak) || 0
-              : Math.max(state.stats.maxStreak, Number(report.stats.maxStreak) || 0),
-          };
-          const lastCompletedPuzzleChanged = Boolean(
-            lastPuzzle && state.lastCompletedPuzzle !== lastPuzzle
-          );
-          if (lastPuzzle) {
-            state.lastCompletedPuzzle = lastPuzzle;
-          }
-          const updated =
-            nextStats.played !== state.stats.played ||
-            nextStats.won !== state.stats.won ||
-            nextStats.streak !== state.stats.streak ||
-            nextStats.maxStreak !== state.stats.maxStreak ||
-            lastCompletedPuzzleChanged;
-
-          if (updated) {
-            state.stats = nextStats;
-            saveState();
-            renderStatsSummary();
-            console.log('[Nostr Sync] Stats updated from reconstructed Nostr history', {
-              totalEvents: report.meta.totalEvents,
-              uniqueGames: report.meta.uniqueGames,
-              lastPuzzle,
-              puzzleDiff,
-              hasCorrection: report.meta.hasCorrection,
-              stats: nextStats,
-            });
-          } else {
-            console.log('[Nostr Sync] No updates needed (local stats are current)');
-          }
-          return;
-        }
-
-        const { SimplePool } = await import('https://esm.sh/nostr-tools@2?bundle');
-        const pool = new SimplePool();
-        const relays = window.NostrPost?.DEFAULT_RELAYS || [
-          'wss://relay.damus.io',
-          'wss://nos.lol',
-          'wss://relay.snort.social'
-        ];
-
-        // Query for this user's word5 posts (use #t tag - relays index standard tags)
-        console.log('[Nostr Sync] Querying relays:', relays);
-        const events = await pool.querySync(relays,
-          { kinds: [1], authors: [pubkey], '#t': ['word5'], limit: 100 }
-        );
-
-        try { pool.close(relays); } catch (_) {}
-
-        console.log('[Nostr Sync] Found', events?.length || 0, 'posts');
-
-        if (!events || events.length === 0) {
-          console.log('[Nostr Sync] No posts found for this pubkey');
-          return;
-        }
-
-        // Sort by created_at descending (most recent first)
-        events.sort((a, b) => b.created_at - a.created_at);
-
-        // Parse stats from all events
-        let nostrMaxStreak = 0;
-        let nostrPlayed = 0;
-        let nostrWon = 0;
-
-        // Walk events from most recent to oldest to rebuild the current win chain.
-        // A streak only continues when published puzzle numbers are sequential.
-        let currentChainStreak = 0;
-        let mostRecentPuzzle = 0;
-        let chainBroken = false;
-        let newerChainPuzzle = 0;
-
-        for (const event of events) {
-          const tags = Object.fromEntries(
-            event.tags.filter(t => ['streak', 'maxStreak', 'played', 'won', 'puzzle', 'result'].includes(t[0]))
-              .map(t => [t[0], t[1]])
-          );
-          const puzzleMatch = event.content.match(/WORD5\s*#(\d+)/i);
-          const eventPuzzle = puzzleMatch
-            ? parseInt(puzzleMatch[1], 10)
-            : (parseInt(tags.puzzle, 10) || 0);
-
-          // Track highest aggregate stats across ALL posts
-          const ms = parseInt(tags.maxStreak, 10) || 0;
-          const pl = parseInt(tags.played, 10) || 0;
-          const wo = parseInt(tags.won, 10) || 0;
-          if (ms > nostrMaxStreak) nostrMaxStreak = ms;
-          if (pl > nostrPlayed) nostrPlayed = pl;
-          if (wo > nostrWon) nostrWon = wo;
-
-          // Get puzzle number from the most recent event
-          if (event === events[0]) {
-            mostRecentPuzzle = eventPuzzle;
-          }
-
-          // For streak chain: stop at first loss or skipped puzzle, but keep scanning for aggregates.
-          if (!chainBroken) {
-            if (tags.result === 'X') {
-              chainBroken = true;
-            } else if (
-              newerChainPuzzle &&
-              eventPuzzle &&
-              ((newerChainPuzzle - eventPuzzle + 1000) % 1000) !== 1
-            ) {
-              chainBroken = true;
-            } else {
-              currentChainStreak += 1;
-              newerChainPuzzle = eventPuzzle || newerChainPuzzle;
-            }
-          }
-        }
-
-        // Validate streak recency: most recent post must be the current or previous puzzle.
-        const currentPuzzle = state.periodId % 1000;
-        const puzzleDiff = (currentPuzzle - mostRecentPuzzle + 1000) % 1000;
-        const hoursSinceLastPost = (Date.now() / 1000 - events[0].created_at) / 3600;
-        const streakStillValid = puzzleDiff <= 1;
-
-        const validStreak = streakStillValid ? currentChainStreak : 0;
-
-        console.log('[Nostr Sync] Parsed from Nostr:', {
-          posts: events.length,
-          mostRecentPuzzle,
-          currentPuzzle,
-          puzzleDiff,
-          hoursSinceLastPost: Math.round(hoursSinceLastPost),
-          streakStillValid,
-          currentChainStreak,
-          nostr: { maxStreak: nostrMaxStreak, played: nostrPlayed, won: nostrWon },
-          local: { streak: state.stats.streak, maxStreak: state.stats.maxStreak, played: state.stats.played, won: state.stats.won }
-        });
-
-        // Update local state if Nostr has higher values
-        let updated = false;
-        if (mostRecentPuzzle && state.lastCompletedPuzzle !== mostRecentPuzzle) {
-          state.lastCompletedPuzzle = mostRecentPuzzle;
-          updated = true;
-        }
-
-        if (nostrMaxStreak > state.stats.maxStreak) {
-          state.stats.maxStreak = nostrMaxStreak;
-          updated = true;
-        }
-        if (validStreak > state.stats.streak) {
-          state.stats.streak = validStreak;
-          updated = true;
-        }
-        if (nostrPlayed > state.stats.played) {
-          state.stats.played = nostrPlayed;
-          updated = true;
-        }
-        if (nostrWon > state.stats.won) {
-          state.stats.won = nostrWon;
-          updated = true;
-        }
-
-        if (updated) {
-          saveState();
-          renderStatsSummary();
-          console.log('[Nostr Sync] ✓ Stats updated from Nostr');
-        } else {
-          console.log('[Nostr Sync] No updates needed (local stats are current)');
-        }
-      } catch (e) {
-        // Silently fail - this is background sync, don't disrupt the game
-        console.log('[Nostr Sync] Skipped:', e.message || e);
+        saveState(); renderStatsSummary(); updateBoard(); updateKeyboard(); window.updateHardModeToggleState();
+        const status = document.getElementById('scoreStatus');
+        if (status && report.completed) status.textContent = 'Today’s result restored from the server · already recorded';
+        if (report.completed && !wasGameOver) setTimeout(() => showResult(), 0);
+        return report;
+      } catch (error) {
+        if (revision !== historyRevision || pubkey !== gameOwner) return;
+        const status = document.getElementById('scoreStatus');
+        if (status) status.textContent = 'Server history unavailable · this account’s local game is kept. Retry by reopening this page.';
+        console.warn('Server history restore unavailable:', error.message || error);
       }
+    }
+
+    function activeGameIdentity() {
+      const player = window.NostrSession?.getPlayer();
+      return player?.linked_pubkey || player?.pubkey || null;
+    }
+
+    function changeGameIdentity() {
+      const next = activeGameIdentity();
+      if (!next || next === gameOwner) return;
+      saveState(); // Save the outgoing account before selecting the new one.
+      gameOwner = next;
+      window.AmberSigner?.cancel();
+      state.revealing = false;
+      state.guesses = []; state.currentGuess = ''; state.gameOver = false; state.won = false;
+      state.completedAt = 0; state.gameUpdatedAt = 0; state.serverCompleted = false; state.serverResult = null;
+      state.lastCompletedPuzzle = null; state.lastPeriodId = null;
+      state.stats = { played: 0, won: 0, streak: 0, maxStreak: 0 };
+      loadState(); updateBoard(); updateKeyboard(); renderStatsSummary();
+      _nostrSyncPromise = syncStatsFromNostr();
     }
 
     // Update timer display
@@ -1688,7 +1568,10 @@
       state.periodId = getCurrentPeriodId();
       state.targetWord = getWordForPeriod(state.periodId);
 
+      await window.NostrSession.whenReady;
+      gameOwner = activeGameIdentity();
       loadState();
+      window.addEventListener('player-ready', changeGameIdentity);
       initBoard();
       initKeyboard();
       updateBoard();
@@ -1801,16 +1684,19 @@
       const completionKey = () => { const p=window.NostrSession?.getPlayer?.(); return `word5-completion-${state.periodId}-${p?.linked_pubkey || p?.pubkey || 'anonymous'}`; };
 
       recordCompletedScore = async function () {
-        if (!state.gameOver) return null;
+        if (!state.gameOver || state.serverCompleted) return null;
         if (completionPromise) return completionPromise;
         completionPromise = (async () => {
+          if (_nostrSyncPromise) await _nostrSyncPromise;
+          if (state.serverCompleted) return null;
+          const owner = gameOwner;
           const key = completionKey();
           let event = JSON.parse(localStorage.getItem(key) || 'null');
           if (!event) {
             try {
               await window.NostrSigners?.ready?.();
               const player = window.NostrSession?.getPlayer?.();
-              const signedIn = player?.auth_mode === 'nip07' || player?.auth_mode === 'bunker' ||
+              const signedIn = player?.auth_mode === 'amber' || player?.auth_mode === 'nip07' || player?.auth_mode === 'bunker' ||
                 (player?.auth_mode === 'session' && Boolean(player.privkey));
               if (!signedIn) {
                 scoreStatus.textContent = 'Anonymous game: connect your Nostr identity before the next puzzle to enter Top Scores.';
@@ -1830,6 +1716,7 @@
                   hardMode: Boolean(state.hardMode)
                 })
               });
+              if (owner !== gameOwner || event.pubkey !== owner) throw new Error('Account changed; retry from the active account');
               localStorage.setItem(key, JSON.stringify(event));
             } catch (error) {
               scoreStatus.textContent = `Could not sign this score: ${error.message || error}`;
@@ -1838,6 +1725,8 @@
           }
           try {
             const saved = await WORD5_SERVER_API.send('api/completion', event);
+            if (owner !== gameOwner) return saved;
+            await syncStatsFromNostr();
             window.dispatchEvent(new Event('word5-completed'));
             scoreStatus.textContent = `${saved.submission.points} points recorded${saved.submission.publishedAt ? ' · Posted to Nostr' : ''}`;
             return saved;
@@ -1849,7 +1738,12 @@
         try { return await completionPromise; } finally { completionPromise = null; }
       };
       window.Word5App.recordCompletedScore = recordCompletedScore;
-      window.addEventListener("player-ready", () => { if (state.gameOver) void recordCompletedScore(); });
+      document.getElementById('retryScoreBtn').onclick = async () => {
+        if (completionPromise) window.AmberSigner?.cancel();
+        await syncStatsFromNostr();
+        await recordCompletedScore();
+      };
+      window.addEventListener("player-ready", () => { if (state.gameOver && !state.serverCompleted) void recordCompletedScore(); });
       if (state.gameOver) {
         void recordCompletedScore().then(async (saved) => {
           const posted = JSON.parse(localStorage.getItem(`word5-publication-${state.periodId}`) || 'null');
@@ -1907,6 +1801,7 @@
       }
 
       function publishKind5555InBackground({ signer, relays, periodNum }) {
+        if (signer.mode === 'amber') return;
         // Best-effort shadow publish for external leaderboard consumers.
         void (async () => {
           try {
@@ -1982,7 +1877,7 @@
               ['puzzle', String(periodNum)],
               ['period', String(state.periodId)],
               ['date', getDateForPeriod(state.periodId)],
-              ['result', state.won ? String(state.guesses.length) : 'X'],
+              ['result', state.won ? String(state.serverResult || state.guesses.length) : 'X'],
               ['schema', 'word5.score.v1'],
               // Streak and stats for leaderboards
               ['streak', String(state.stats.streak)],
@@ -2019,7 +1914,7 @@
           showToast('Posted to Nostr!');
           try {
             const saved = await recordCompletedScore();
-            if (saved) {
+            if (saved || state.serverCompleted) {
               await WORD5_SERVER_API.send('api/publication', signed);
               scoreStatus.textContent = 'Score recorded · Posted to Nostr';
             }

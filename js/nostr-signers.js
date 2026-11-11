@@ -64,6 +64,10 @@
   async function getActiveSigner() {
     if (!window.NostrSession) throw new Error("NostrSession unavailable");
     const player = getPlayer ? getPlayer() : null;
+    if (player?.auth_mode === "amber") {
+      return { getPublicKey: async () => player.linked_pubkey,
+        signEvent: event => window.AmberSigner.signEvent(event), mode: "amber" };
+    }
     if (
       player?.auth_mode === "nip07" &&
       window.nostr &&

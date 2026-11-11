@@ -547,6 +547,60 @@ export class Word5Service {
     return { ok: true, submission: row };
   }
 
+  // Return only the restoration summary. Detailed unpublished completion records stay private.
+  playerHistory(pubkey: string, now = Date.now()) {
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error("Invalid player pubkey");
+    const current = getCurrentPeriodId(now);
+    const publicRows = this.db.query(`SELECT event_id AS eventId,event_type AS eventType,
+      period_id AS periodId,puzzle,result,created_at AS createdAt,played,won,streak,max_streak AS maxStreak
+      FROM public_score_history WHERE pubkey=?1 ORDER BY created_at,event_id`).all(pubkey) as any[];
+    const verified = this.db.query(`SELECT g.event_id AS eventId,g.period_id AS periodId,g.result,r.created_at AS createdAt
+      FROM game_submissions g JOIN raw_events r ON r.event_id=g.event_id
+      WHERE g.pubkey=?1 AND g.verified_completion=1 ORDER BY g.period_id`).all(pubkey) as any[];
+    const byPeriod = new Map<number, any>();
+    for (const row of publicRows.filter(row => row.eventType === "score")) {
+      const postedPeriod = Math.floor(row.createdAt / 86400);
+      const periodId = row.periodId ?? postedPeriod - ((postedPeriod % 1000 - (row.puzzle % 1000) + 1000) % 1000);
+      if (!Number.isSafeInteger(periodId) || periodId < 0 || periodId > current) continue;
+      // Public duplicate formats never create extra games. Prefer kind-independent stable ordering.
+      if (!byPeriod.has(periodId)) byPeriod.set(periodId, { ...row, periodId, source: "signed-public-history" });
+    }
+    for (const row of verified) {
+      if (row.periodId <= current) byPeriod.set(row.periodId, { ...row, source: "server-verified" });
+    }
+    const rows = [...byPeriod.values()].sort((a, b) => a.periodId - b.periodId);
+    const correction = publicRows.filter(row => row.eventType === "correction" && row.createdAt * 1000 <= now).at(-1);
+    const stats = correction ? { played: correction.played, won: correction.won,
+      streak: correction.streak, maxStreak: correction.maxStreak } : { played: 0, won: 0, streak: 0, maxStreak: 0 };
+    let lastPeriodId: number | null = null;
+    const baselinePeriods = new Set<number>();
+    if (correction) {
+      for (const row of publicRows.filter(row => row.eventType === "score" && row.createdAt <= correction.createdAt)) {
+        const posted = Math.floor(row.createdAt / 86400);
+        baselinePeriods.add(row.periodId ?? posted - ((posted % 1000 - (row.puzzle % 1000) + 1000) % 1000));
+      }
+      for (const row of verified) if (row.createdAt <= correction.createdAt) baselinePeriods.add(row.periodId);
+      const correctionPeriod = Math.floor(correction.createdAt / 86400);
+      const laterSameDay = rows.some(row => row.periodId === correctionPeriod && row.createdAt > correction.createdAt);
+      lastPeriodId = baselinePeriods.size ? Math.max(...baselinePeriods) : correctionPeriod - (laterSameDay ? 1 : 0);
+    }
+    for (const row of rows) {
+      if (correction && (baselinePeriods.has(row.periodId) || row.createdAt <= correction.createdAt)) continue;
+      stats.played++;
+      if (row.result !== "X") {
+        stats.won++;
+        stats.streak = lastPeriodId !== null && row.periodId === lastPeriodId + 1 ? stats.streak + 1 : 1;
+        stats.maxStreak = Math.max(stats.maxStreak, stats.streak);
+      } else stats.streak = 0;
+      lastPeriodId = row.periodId;
+    }
+    if (lastPeriodId === null || current - lastPeriodId > 1) stats.streak = 0;
+    return { ok: true, pubkey, periodId: current, stats, lastPeriodId,
+      lastPuzzle: lastPeriodId === null ? null : lastPeriodId % 1000,
+      completed: byPeriod.has(current), currentResult: byPeriod.get(current)?.result ?? null,
+      basis: "server-archive", correctionEventId: correction?.eventId ?? null, historyCount: rows.length };
+  }
+
   completionStatus(event: Event, now = Date.now()) {
     if (!event || !validateEvent(event) || !verifyEvent(event) || getEventHash(event) !== event.id ||
         event.kind !== 30078 || tagValue(event, "schema") !== "word5.sync-status.v1") {

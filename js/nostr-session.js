@@ -48,6 +48,7 @@
       player = await generateSessionPlayer();
       save(player);
     }
+    if (window.AmberSigner) { player = await window.AmberSigner.restore(player); save(player); }
     notifyReady(player);
     return player;
   }
