@@ -14,6 +14,16 @@ The former query-based request fails against released Amber: [v6.6.9](https://gi
 
 All four inspected versions support the string-extra request, including the browser parser’s fallback to extras when data has no query. A browser caller has no native calling package, so Amber returns through `callbackUrl` by appending `Uri.encode(result)` (or the full event when `returnType=event`). Tests model those released parsing and return branches. They demonstrate concrete protocol failures; the installed Amber version and exact browser extras on a reported phone remain unverified without device diagnostics.
 
+## Recover a missing return
+
+If Word5 is still waiting after returning from Amber, choose **Return result manually**. Choose **Open Amber in copy mode**, approve, switch back to Word5, and use **Paste from clipboard → Use result**. If clipboard access is denied, paste into the visible text box with the keyboard. Word5 reads the clipboard only on that explicit button click.
+
+For login, paste only the **public** `npub` or 64-character hexadecimal public key. You can also copy the public npub directly from Amber's account screen if the app handoff fails. Account selection restores public server history; it does not authorize a score or post. Never paste a secret key or recovery words. For signing, paste the complete signed event JSON. Word5 accepts it only for the saved, unexpired request, current account, exact payload (including timestamp), event hash and valid signature. Invalid manual input clears the input but leaves the request available to retry. Cancel removes the request and any unused returned signature.
+
+Copy mode omits `callbackUrl`; stable Amber copies the public key or full event when there is no native calling package and no callback. Its native activity-result branch takes precedence when a calling package exists. Parser web classification and response routing are separate: `MainActivity.callingPackage` supplies the latter. The login UI passes the selected account's hex public key to the same `sendResult` routine. This is source evidence, not proof of a particular phone's failure.
+
+A reload without a result, or an empty or unmatched callback, preserves the saved request for explicit recovery. Status distinguishes the missing public key from a missing signed event. **Copy connection status** exports only the asset version, fixed stage and fixed error code; it contains no account, event, guess, request token or logs. Text is displayed if clipboard writing is unavailable.
+
 ## History authority
 
 `GET api/player-history?pubkey=<64 lowercase hex characters>` reads the server database. It combines signed public score history with verified private completions, deduplicates by absolute puzzle period, prefers verified outcomes, applies signed correction baselines, and counts subsequent completions once. Same-day corrections use the signed completion timestamp, rather than treating all completions as occurring at midnight. Streaks follow consecutive UTC puzzle periods, including puzzle-number rollover. Local fallback also compares full period IDs, and expire after a missed day. The response contains only the aggregate/restoration summary; detailed per-game rows, private event IDs, signing timestamps and guesses stay internal.

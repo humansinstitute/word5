@@ -15,7 +15,8 @@ function adapter() {
   const window = { NostrSession: { getPlayer: () => player }, addEventListener() {} } as any;
   runInNewContext(readFileSync('js/amber-signer.js', 'utf8'), { window, document, location, URL, URLSearchParams, crypto,
     localStorage: { getItem: (k: string) => storage.get(k), setItem: (k: string, v: string) => storage.set(k, v), removeItem: (k: string) => storage.delete(k) } });
-  return { window, location, storage, open: () => elements.get('amberRequest').children[1].onclick() };
+  return { window, location, storage, open: () => elements.get('amberRequest').children[1].onclick(),
+    manual: () => { const panel = elements.get('amberRequest'); panel.children[2].onclick(); panel.children[3].children[1].onclick(); } };
 }
 const versions = ['v3.4.3', 'v4.0.0', 'v6.6.9', 'v7.0.0-pre3'];
 test('released Amber reproduces the previous outgoing URI callback truncation', () => {
@@ -55,5 +56,23 @@ test('actual signing URI preserves JSON punctuation, percent escapes, Unicode an
     expect(parsed.params.returnType).toBe('event');
     const returned = new URL(amberReturn(a.location.href, 'signature', pending.event, version, applicationId));
     expect(JSON.parse(new URLSearchParams(returned.hash.slice(1)).get('amber-result')!)).toEqual(pending.event);
+  }
+});
+
+test('manual mode launches actual request without callback and requests public key or full event', () => {
+  for (const signing of [false, true]) {
+    const a = adapter();
+    if (signing) void a.window.AmberSigner.signEvent({ kind: 1, created_at: 123, content: 'Copy? & %', tags: [] });
+    else a.window.AmberSigner.login();
+    a.manual();
+    const request = JSON.parse(a.storage.get('word5-amber-pending-v1')!);
+    expect(request.manual).toBe(true);
+    for (const version of versions) for (const applicationId of [true, false]) {
+      const parsed = parseAmber(a.location.href, version, applicationId);
+      expect(parsed.params.callbackUrl).toBeUndefined();
+      expect(parsed.params.type).toBe(signing ? 'sign_event' : 'get_public_key');
+      expect(parsed.params.returnType).toBe(signing ? 'event' : 'signature');
+      if (signing) expect(parsed.event).toEqual(request.event);
+    }
   }
 });

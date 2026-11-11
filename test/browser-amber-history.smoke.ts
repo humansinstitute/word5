@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAmber, amberReturn } from './helpers/amber-contract';
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { Word5Service, getCurrentPeriodId } from '../src/word5';
 const { chromium } = await import(process.env.WORD5_PLAYWRIGHT_MODULE || 'playwright');
 const root = resolve(import.meta.dir, '..');
@@ -181,6 +181,7 @@ try {
   await second.page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${expired.id}&amber-result=${other}`);
   await second.page.waitForFunction(() => document.getElementById('amberRequest')?.textContent?.includes('Unrecognized or expired'));
   check(await second.page.evaluate(key => (window as any).NostrSession.getPlayer().linked_pubkey === key, pubkey), 'expired callback cannot replace preserved signer account');
+  await manualRecovery();
   await callbackRaces();
   await context.close(); await second.context.close();
 } finally { await browser.close(); server.stop(true); service.db.close(); }
@@ -246,5 +247,114 @@ async function callbackRaces() {
       `late login callback cannot overwrite ${action.endsWith('switch') ? 'an account switch' : 'Cancel and a newer request'} after ${action.startsWith('reject-') ? 'failed' : 'successful'} module loading`);
     await page.evaluate(() => (window as any).AmberSigner.cancel());
   }
+  await context.close();
+}
+
+async function manualRecovery() {
+  const { context, page } = await newPhone();
+  const button = (name: string) => page.getByRole('button', { name, exact: true });
+  await page.evaluate(() => {
+    (window as any).__reads = 0;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      readText: async () => { (window as any).__reads++; throw new Error('denied'); },
+      writeText: async (value: string) => { (window as any).__diagnostic = value; }
+    } });
+    (window as any).AmberSigner.login();
+  });
+  await openAmber(page);
+  const id = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!).id);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  check((await page.locator('#amberRequest').textContent()).includes('has not delivered your public key'), 'absent callback offers public-key recovery on browser return');
+  await page.reload();
+  await page.waitForSelector('#amberRequest');
+  check(await page.evaluate(id => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!).id === id, id), 'absent callback reload retains the exact request');
+  await page.evaluate(id => { location.hash = `amber-state=${id}&amber-result=`; }, id);
+  await page.waitForFunction(() => !location.hash);
+  check(await page.evaluate(id => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!).id === id, id), 'bare callback preserves pending request for recovery');
+  await button('Return result manually').click();
+  outgoing.delete(page);
+  await button('Open Amber in copy mode').click();
+  for (let i = 0; i < 100 && !outgoing.has(page); i++) await page.waitForTimeout(10);
+  const parsed = parseAmber(outgoing.get(page)!);
+  check(parsed.params.type === 'get_public_key' && !parsed.params.callbackUrl, 'manual public-key launch explicitly omits callback');
+  await page.evaluate(() => {
+    (window as any).__reads = 0;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => { (window as any).__reads++; throw new Error('denied'); } } });
+  });
+  await button('Paste from clipboard').click();
+  check((await page.locator('#amberRequest').textContent()).includes('Clipboard access unavailable'), 'denied clipboard has a keyboard-paste fallback');
+  await page.locator('#amberManualResult').fill('nsec1-do-not-accept');
+  await button('Use result').click();
+  check(await page.evaluate(() => !!localStorage.getItem('word5-amber-pending-v1') && !localStorage.getItem('spiders.nostr.player.v1')?.includes('nsec1-do-not-accept')), 'secret-looking input is rejected without storage or loss of request');
+  await page.locator('#amberManualResult').fill(nip19.npubEncode(pubkey));
+  await button('Use result').click();
+  await page.waitForFunction(pk => (window as any).NostrSession.getPlayer().linked_pubkey === pk && JSON.parse(localStorage.getItem('words-game')!).stats.played === 3, pubkey);
+  check(await page.locator('#amberConnected').count(), 'manual npub login validates and restores same-account server history');
+  // Another explicit login exercises hex acceptance and manual form restoration.
+  await page.evaluate(() => (window as any).AmberSigner.login());
+  await button('Return result manually').click();
+  await page.reload(); await page.waitForSelector('#amberManualResult:visible');
+  await page.locator('#amberManualResult').fill(pubkey);
+  await button('Use result').click(); await page.waitForSelector('#amberConnected');
+  check(await page.evaluate(() => !localStorage.getItem('word5-amber-pending-v1')), 'manual hex login survives full reload and clears only its request');
+  await page.evaluate(() => { (window as any).__manualSigned = null;
+    void (window as any).AmberSigner.signEvent({ kind: 1, created_at: 246, tags: [['x', 'manual']], content: 'Manual event' })
+      .then((event: any) => { (window as any).__manualSigned = event; }).catch((e: any) => { (window as any).__manualError = e.message; });
+  });
+  await button('Return result manually').click();
+  await button('Open Amber in copy mode').click();
+  const pending = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
+  await page.locator('#amberManualResult').fill(JSON.stringify(finalizeEvent({ ...pending.event, content: 'wrong' }, secret)));
+  await button('Use result').click();
+  await page.waitForFunction(() => document.getElementById('amberRequest')?.textContent?.includes('Result could not be accepted'));
+  check(await page.evaluate(() => !(window as any).__manualSigned && !!localStorage.getItem('word5-amber-pending-v1')), 'manual altered signed event is rejected while preserving recovery');
+  await page.locator('#amberManualResult').fill(JSON.stringify(finalizeEvent(pending.event, secret)));
+  await button('Use result').click();
+  await page.waitForFunction(() => !!(window as any).__manualSigned);
+  check(await page.evaluate(() => !localStorage.getItem('word5-amber-pending-v1') && !localStorage.getItem('word5-amber-returned-v1')), 'manual exact signed event resolves the same-tab waiter once');
+  // A full reload has no waiter: preserve only the exact approved payload for retry.
+  await page.evaluate(() => { void (window as any).AmberSigner.signEvent({ kind: 1, created_at: 247, tags: [], content: 'reload manual' }).catch(() => {}); });
+  await button('Return result manually').click();
+  const reloadPending = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
+  await page.reload(); await page.waitForSelector('#amberManualResult:visible');
+  await page.locator('#amberManualResult').fill(JSON.stringify(finalizeEvent(reloadPending.event, secret)));
+  await button('Use result').click();
+  await page.waitForFunction(() => !!localStorage.getItem('word5-amber-returned-v1'));
+  const resumed = await page.evaluate(() => (window as any).AmberSigner.signEvent({ kind: 1, created_at: 250, tags: [], content: 'reload manual' }));
+  check(resumed.content === 'reload manual', 'manual signed event after reload resumes only its approved payload');
+  await page.locator('#amberRequest button').click();
+  await page.evaluate(() => (window as any).AmberSigner.login());
+  await button('Return result manually').click();
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { (window as any).__diagnostic = value; } } }));
+  await button('Copy connection status').click();
+  check(await page.evaluate(() => /^Word5 20261111-5; stage=[a-z-]+; error=[a-z-]+$/.test((window as any).__diagnostic)), 'diagnostic export contains only version, stage and fixed error code');
+  await page.locator('#amberManualResult').fill(pubkey);
+  await page.evaluate(async () => {
+    const use = Array.from(document.querySelectorAll('#amberRequest button')).find(e => e.textContent === 'Use result') as HTMLButtonElement;
+    (window as any).NostrSession.updatePlayer({ linked_pubkey: 'b'.repeat(64) });
+    await (use.onclick as any)();
+  });
+  check(await page.evaluate(() => (window as any).NostrSession.getPlayer().linked_pubkey === 'b'.repeat(64)), 'manual login cannot overwrite an account switch');
+  await page.evaluate(() => (window as any).AmberSigner.cancel());
+  check(await page.evaluate(() => !localStorage.getItem('word5-amber-pending-v1')), 'manual Cancel clears pending recovery');
+  // Complete a fresh account's game through manual paste after losing the tab.
+  const completionSecret = generateSecretKey(), completionKey = getPublicKey(completionSecret);
+  await page.evaluate(() => (window as any).AmberSigner.login());
+  await button('Return result manually').click();
+  await page.locator('#amberManualResult').fill(completionKey);
+  await button('Use result').click();
+  await page.waitForFunction(pk => (window as any).NostrSession.getPlayer().linked_pubkey === pk && !((window as any).eval('state.gameOver')), completionKey);
+  await page.evaluate(() => (window as any).eval('state.currentGuess = state.targetWord; submitGuess();'));
+  await page.waitForSelector('#amberRequest');
+  await button('Return result manually').click();
+  const completionRequest = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
+  check(completionRequest.event.tags.some((t: string[]) => t[1] === 'word5.completion.v1'), 'manual completion retains full original completion payload');
+  await page.reload(); await page.waitForSelector('#amberManualResult:visible');
+  await page.locator('#amberManualResult').fill(JSON.stringify(finalizeEvent(completionRequest.event, completionSecret)));
+  await button('Use result').click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('words-game') || '{}').serverCompleted === true);
+  await page.reload();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('words-game') || '{}').serverCompleted === true);
+  check(service.playerHistory(completionKey).stats.played === 1 && service.playerHistory(pubkey).stats.streak === 3, 'manual completion after full reload records once and preserves other account streak');
   await context.close();
 }
