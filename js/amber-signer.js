@@ -121,7 +121,9 @@
       clear();
       if (waiter) { waiter.reject(error); waiter = null; }
       showError(error.message || String(error));
-      return player;
+      // Module loading may have failed after the user switched accounts.
+      // Error reporting must retain the current player, just like success does.
+      return window.NostrSession?.getPlayer() || player;
     }
   }
   function showSuccess() {

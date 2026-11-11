@@ -213,11 +213,11 @@ async function callbackRaces() {
   await page.addScriptTag({ content: adapter });
   const cdp = await context.newCDPSession(page); await cdp.send('Page.enable');
   cdp.on('Page.frameRequestedNavigation', (e: any) => { if (e.url.startsWith('intent:')) outgoing.set(page, e.url); });
-  for (const action of ['switch', 'cancel-retry']) {
+  for (const action of ['switch', 'cancel-retry', 'reject-switch', 'reject-cancel-retry']) {
     await page.evaluate(pk => {
       const w = window as any;
       w.NostrSession.updatePlayer({ pubkey: pk, auth_mode: 'session' });
-      w.__gate = new Promise(resolve => { w.__release = () => resolve(w.__tools); });
+      w.__gate = new Promise((resolve, reject) => { w.__release = () => resolve(w.__tools); w.__reject = () => reject(new Error('Module unavailable')); });
       w.AmberSigner.login();
     }, pubkey);
     const intent = await openAmber(page);
@@ -229,21 +229,21 @@ async function callbackRaces() {
       w.__restore = w.AmberSigner.restore(w.NostrSession.getPlayer());
       w.__duplicate = w.AmberSigner.restore(w.NostrSession.getPlayer());
       w.__shared = w.__restore === w.__duplicate;
-      if (action === 'switch') w.NostrSession.updatePlayer({ pubkey: other, auth_mode: 'session' });
+      if (action.endsWith('switch')) w.NostrSession.updatePlayer({ pubkey: other, auth_mode: 'session' });
       else { w.AmberSigner.cancel(); w.AmberSigner.login(); }
     }, { url: amberReturn(intent, other), action, other });
     let retryId: string | undefined;
-    if (action === 'cancel-retry') {
+    if (action.endsWith('cancel-retry')) {
       await openAmber(page);
       retryId = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!).id);
     }
-    const result = await page.evaluate(async () => {
-      const w = window as any; w.__release();
+    const result = await page.evaluate(async action => {
+      const w = window as any; if (action.startsWith('reject-')) w.__reject(); else w.__release();
       const player = await w.__restore; w.NostrSession.updatePlayer(player);
       return { shared: w.__shared, player, pending: JSON.parse(localStorage.getItem('word5-amber-pending-v1') || 'null'), success: !!document.getElementById('amberConnected') };
-    });
-    check(result.shared && !result.success && (action === 'switch' ? result.player.pubkey === other && !result.player.linked_pubkey : result.player.pubkey === pubkey && result.pending?.id === retryId),
-      `late login callback cannot overwrite ${action === 'switch' ? 'an account switch' : 'Cancel and a newer request'} during module loading`);
+    }, action);
+    check(result.shared && !result.success && (action.endsWith('switch') ? result.player.pubkey === other && !result.player.linked_pubkey : result.player.pubkey === pubkey && result.pending?.id === retryId),
+      `late login callback cannot overwrite ${action.endsWith('switch') ? 'an account switch' : 'Cancel and a newer request'} after ${action.startsWith('reject-') ? 'failed' : 'successful'} module loading`);
     await page.evaluate(() => (window as any).AmberSigner.cancel());
   }
   await context.close();
