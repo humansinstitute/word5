@@ -87,10 +87,48 @@ describe('authoritative player history', () => {
     expect(native.coveredPeriods).toEqual([20999,21000]);
     expect(native.outcomes).toEqual([[20999,3],[21000,1]]);
     expect(native.distribution).toEqual([1,0,1,0,0,0]);
+    expect(native.correctionAnchor).toBeNull();
     const publicSummary = f.service.playerHistory(f.pubkey,21000*86400000+30000);
     expect(publicSummary).not.toHaveProperty('coveredPeriods');
     expect(publicSummary).not.toHaveProperty('outcomes');
     expect(publicSummary).not.toHaveProperty('distribution');
+    expect(publicSummary).not.toHaveProperty('correctionAnchor');
+    f.service.db.close();
+  });
+
+  test('native correction seed is captured before later public games advance it', () => {
+    const f = fixture();
+    const correction = finalizeEvent({ kind: 5555, created_at: 21000 * 86400 + 100,
+      tags: [['t', 'word5'], ['schema', 'word5.stats.v1'], ['played', '0'], ['won', '0'], ['streak', '0'], ['maxStreak', '0']], content: '' }, f.secret);
+    f.service.socialHistory.archive(correction);
+    f.service.socialHistory.archive(f.publicScore(21002));
+    f.service.socialHistory.archive(f.publicScore(21004));
+    const now = 21004 * 86400000 + 30000;
+    const native = f.service.playerHistory(f.pubkey, now, true) as any;
+    expect(native.stats).toEqual({ played: 2, won: 2, streak: 1, maxStreak: 1 });
+    expect(native.lastPeriodId).toBe(21004);
+    expect(native.correctionCreatedAt).toBe(correction.created_at);
+    expect(native.correctionEventId).toBe(correction.id);
+    expect(native.correctionAnchor).toEqual({ streak: 0, maxStreak: 0, lastPeriod: 21000, covered: [] });
+    expect(native.outcomes).toEqual([[21002, 2], [21004, 2]]);
+    expect(f.service.playerHistory(f.pubkey, now)).not.toHaveProperty('correctionAnchor');
+    f.service.db.close();
+  });
+
+  test('native correction coverage distinguishes an earlier from a later same-day completion', () => {
+    const f = fixture();
+    const correction = (seconds: number) => finalizeEvent({ kind: 5555, created_at: 21002 * 86400 + seconds,
+      tags: [['t', 'word5'], ['schema', 'word5.stats.v1'], ['played', '40'], ['won', '39'], ['streak', '12'], ['maxStreak', '15']], content: '' }, f.secret);
+    f.service.socialHistory.archive(correction(100));
+    f.complete(21002, 200);
+    const before = f.service.playerHistory(f.pubkey, 21002 * 86400000 + 300000, true) as any;
+    expect(before.correctionAnchor).toEqual({ streak: 12, maxStreak: 15, lastPeriod: 21001, covered: [] });
+    expect(before.stats.streak).toBe(13);
+    f.service.socialHistory.archive(correction(250));
+    const after = f.service.playerHistory(f.pubkey, 21002 * 86400000 + 300000, true) as any;
+    expect(after.correctionAnchor).toEqual({ streak: 12, maxStreak: 15, lastPeriod: 21002, covered: [21002] });
+    expect(after.stats.streak).toBe(12);
+    expect(JSON.stringify(after.correctionAnchor)).not.toContain('guesses');
     f.service.db.close();
   });
 

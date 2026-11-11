@@ -584,6 +584,16 @@ export class Word5Service {
       const laterSameDay = rows.some(row => row.periodId === correctionPeriod && row.createdAt > correction.createdAt);
       lastPeriodId = baselinePeriods.size ? Math.max(...baselinePeriods) : correctionPeriod - (laterSameDay ? 1 : 0);
     }
+    // Native clients merge private outcomes with the server timeline. Preserve
+    // the original correction seed so interleaved games replay from that point,
+    // rather than starting from counters already advanced by public games.
+    const correctionAnchor = correction ? {
+      streak: correction.streak,
+      maxStreak: correction.maxStreak,
+      lastPeriod: lastPeriodId,
+      covered: baselinePeriods.has(Math.floor(correction.createdAt / 86400))
+        ? [Math.floor(correction.createdAt / 86400)] : [],
+    } : null;
     for (const row of rows) {
       if (correction && (baselinePeriods.has(row.periodId) || row.createdAt <= correction.createdAt)) continue;
       stats.played++;
@@ -600,6 +610,7 @@ export class Word5Service {
       completed: byPeriod.has(current), currentResult: byPeriod.get(current)?.result ?? null,
       ...(nativeBaseline ? {
         correctionCreatedAt: correction?.createdAt ?? null,
+        correctionAnchor,
         outcomes: rows.map(row => [row.periodId, row.result === "X" ? 7 : Number(row.result)]),
         coveredPeriods: [...new Set([...rows.map(row => row.periodId), ...baselinePeriods])].sort((a,b) => a-b),
         distribution: [1,2,3,4,5,6].map(attempt => rows.filter(row => row.result === String(attempt)).length),
