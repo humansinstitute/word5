@@ -1,3 +1,7 @@
+# 1.0.2-test
+
+Closing a nested result action now returns to the result underneath, matching the web app. Includes Back, outside dismissal and Donate/Score close paths. The prior TEST build remains an immutable published artifact.
+
 # 1.0.1-test
 
 Restores the existing web Word5 presentation in native Compose: compact white WORD5 header and navigation, bounded square board, purple/orange/grey feedback, countdown below the board, bottom keyboard, menu, help, result and statistics dialogs. Native Social includes feed, follows/duels, score/streak leaderboards, comparisons, challenge cards and league views. Profile editing and image upload use the existing Nostr/Blossom contracts. Donation uses the same Lightning address.

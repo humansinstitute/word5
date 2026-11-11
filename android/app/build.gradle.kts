@@ -6,8 +6,8 @@ android {
         applicationId = "ai.otherstuff.word5"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.1-test"
+        versionCode = 3
+        versionName = "1.0.2-test"
         buildConfigField("String", "API_BASE", "\"https://otherstuff.ai/word5/\"")
     }
     buildFeatures { compose = true; buildConfig = true }

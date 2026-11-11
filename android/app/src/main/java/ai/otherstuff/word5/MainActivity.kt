@@ -112,7 +112,7 @@ class MainActivity: ComponentActivity() {
     game.guesses.take(if(m.revealing) maxOf(0,game.guesses.size-1) else game.guesses.size).forEach { guess -> Rules.evaluate(guess, target).forEachIndexed { i, mark -> colors[guess[i]] = maxOf(colors[guess[i]] ?: 0, mark) } }
     val seconds = (86400000 - now % 86400000) / 1000
     val countdown = "%02d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
-    val close = { modal = ""; m.resultOpen = false }
+    val close = { if(modal.isNotEmpty()) modal = "" else m.resultOpen = false }
     BackHandler(menu || modal.isNotEmpty() || m.resultOpen || page!="Play") { if(menu)menu=false else if(modal.isNotEmpty() || m.resultOpen)close() else page="Play" }
     val focus=remember{FocusRequester()}
     LaunchedEffect(modal,page,menu,m.resultOpen){if(modal.isEmpty() && page=="Play" && !menu && !m.resultOpen)focus.requestFocus()}
