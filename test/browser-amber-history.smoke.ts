@@ -1,7 +1,9 @@
 // Full-page regression with genuine Nostr signatures and isolated in-memory server data.
-// Simulates Android returning a callback; cannot test Android's external-app resolver.
+// Captures the actual outgoing intent and returns through released Amber parsing.
+// Cannot test Android's external-app resolver or physical approval UI.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseAmber, amberReturn } from './helpers/amber-contract';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools';
 import { Word5Service, getCurrentPeriodId } from '../src/word5';
 const { chromium } = await import(process.env.WORD5_PLAYWRIGHT_MODULE || 'playwright');
@@ -31,10 +33,21 @@ const browser = await chromium.launch({ headless: true,
   ...(process.env.WORD5_BROWSER_EXECUTABLE ? { executablePath: process.env.WORD5_BROWSER_EXECUTABLE } : {}) });
 const check = (ok: unknown, message: string) => { if (!ok) throw new Error(message); console.log(`PASS ${message}`); };
 const base = String(server.url);
+const outgoing = new WeakMap<any, string>();
+async function openAmber(page: any) {
+  outgoing.delete(page);
+  await page.locator('#amberRequest button').first().click();
+  for (let i = 0; i < 100 && !outgoing.has(page); i++) await page.waitForTimeout(10);
+  if (!outgoing.has(page)) throw new Error('No outgoing Android intent captured');
+  return outgoing.get(page)!;
+}
 async function newPhone() {
   const context = await browser.newContext();
   await context.route('https://esm.sh/**', route => route.fulfill({ body: moduleText, contentType: 'text/javascript' }));
   const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Page.enable');
+  cdp.on('Page.frameRequestedNavigation', (e: any) => { if (e.url.startsWith('intent:')) outgoing.set(page, e.url); });
   page.on('pageerror', error => console.error('PAGE ERROR', error));
   await page.goto(base);
   await page.waitForFunction(() => (window as any).NostrSession?.getPlayer() && (window as any).Word5App?.recordCompletedScore);
@@ -43,10 +56,11 @@ async function newPhone() {
 async function connect(page: any) {
   await page.evaluate(() => (window as any).AmberSigner.login());
   check(await page.evaluate(() => !localStorage.getItem('word5-amber-pending-v1')), 'login does not launch or persist a request without explicit Open Amber click');
-  await page.locator('#amberRequest button').first().click();
+  await openAmber(page);
   const pending = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
   check(pending.type === 'get_public_key', 'explicit click creates correlated login request');
-  await page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${pending.id}&amber-result=${pubkey}`);
+  await page.goto('about:blank');
+  await page.goto(amberReturn(outgoing.get(page)!, pubkey));
   await page.waitForFunction(pk => (window as any).NostrSession?.getPlayer()?.linked_pubkey === pk &&
     JSON.parse(localStorage.getItem('words-game') || '{}').stats?.played === 2, pubkey);
 }
@@ -55,12 +69,27 @@ try {
   await connect(page);
   check(await page.evaluate(() => !location.hash && (window as any).NostrSession.getPlayer().auth_mode === 'amber'), 'Amber callback survives full navigation, selects account, strips callback');
   check(await page.evaluate(() => JSON.parse(localStorage.getItem('words-game')!).stats.streak === 2), 'fresh browser restores server-backed two-game streak');
+  check(await page.locator('#amberConnected').textContent() === 'Connected with Amber. You’re ready to play.', 'successful login shows a clear connection confirmation');
+  // Real same-document return: Android can bring back the existing browser tab.
+  await page.evaluate(() => { (window as any).__signedResult = null;
+    void (window as any).AmberSigner.signEvent({ kind: 1, created_at: 122, tags: [['x', '?&+=']], content: 'Same tab? & + %26 🧡' })
+      .then((e: any) => { (window as any).__signedResult = e; }); });
+  const existingIntent = await openAmber(page);
+  const existingEvent = finalizeEvent(parseAmber(existingIntent).event, secret);
+  await page.evaluate(url => {
+    location.hash = new URL(url).hash;
+    window.dispatchEvent(new Event('focus'));
+    window.dispatchEvent(new Event('pageshow'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, amberReturn(existingIntent, existingEvent.sig, existingEvent));
+  await page.waitForFunction(id => (window as any).__signedResult?.id === id, existingEvent.id);
+  check(await page.evaluate(() => !location.hash && !localStorage.getItem('word5-amber-pending-v1') && !localStorage.getItem('word5-amber-returned-v1') && !document.getElementById('amberRequest')), 'same-tab generated return survives overlapping lifecycle events and resolves signature once');
   // Reject a cryptographically valid signature whose content differs from the requested event.
   await page.evaluate(() => { void (window as any).AmberSigner.signEvent({ kind: 1, created_at: 123, tags: [], content: 'expected' }).catch(() => {}); });
-  await page.locator('#amberRequest button').first().click();
+  await openAmber(page);
   const badPending = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
   const badEvent = finalizeEvent({ ...badPending.event, content: 'altered' }, secret);
-  await page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${badPending.id}&amber-result=${encodeURIComponent(JSON.stringify(badEvent))}`);
+  await page.goto(amberReturn(outgoing.get(page)!, badEvent.sig, badEvent));
   await page.waitForFunction(() => document.getElementById('amberRequest')?.textContent?.includes('different or invalid'));
   check(await page.evaluate(pk => (window as any).NostrSession.getPlayer().linked_pubkey === pk, pubkey), 'tampered signed callback rejected without identity loss');
   await page.locator('#amberRequest button').click();
@@ -68,10 +97,11 @@ try {
   await page.locator('#amberRequest button').last().click();
   check(await page.evaluate(() => !document.getElementById('amberRequest') && !localStorage.getItem('word5-amber-pending-v1')), 'cancel clears pending request and permits retry');
   await page.evaluate(() => { void (window as any).AmberSigner.signEvent({ kind: 1, created_at: 125, tags: [['t', 'word5']], content: 'repeatable post' }).catch(() => {}); });
-  await page.locator('#amberRequest button').first().click();
+  await openAmber(page);
   const postRequest = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
   const postSigned = finalizeEvent(postRequest.event, secret);
-  await page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${postRequest.id}&amber-result=${encodeURIComponent(JSON.stringify(postSigned))}`);
+  await page.goto('about:blank');
+  await page.goto(amberReturn(outgoing.get(page)!, postSigned.sig, postSigned));
   await page.waitForTimeout(1200);
   await page.waitForFunction(() => (window as any).Word5App?.recordCompletedScore && localStorage.getItem('word5-amber-returned-v1'));
   const resumed = await page.evaluate(() => (window as any).AmberSigner.signEvent({ kind: 1, created_at: 135, tags: [['t', 'word5']], content: 'repeatable post' }));
@@ -80,11 +110,12 @@ try {
   // Complete today's puzzle through the actual game UI handler, then sign via reload callback.
   await page.evaluate(() => (window as any).eval('state.currentGuess = state.targetWord; submitGuess();'));
   await page.waitForSelector('#amberRequest');
-  await page.locator('#amberRequest button').first().click();
+  await openAmber(page);
   const completion = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
   check(completion.type === 'sign_event' && completion.pubkey === pubkey && completion.event.tags[0][1] === 'word5.completion.v1', 'completion requests correct preserved Amber account');
   const signed = finalizeEvent(completion.event, secret);
-  await page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${completion.id}&amber-result=${encodeURIComponent(JSON.stringify(signed))}`);
+  await page.goto('about:blank');
+  await page.goto(amberReturn(outgoing.get(page)!, signed.sig, signed));
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('words-game') || '{}').serverCompleted === true);
   check(service.playerHistory(pubkey).stats.streak === 3 && service.playerHistory(pubkey).stats.played === 3, 'signed completion resumes after reload and continues streak without duplicate win');
   await page.reload();
@@ -142,7 +173,7 @@ try {
   check(await second.page.evaluate(key => (window as any).NostrSession.getPlayer().linked_pubkey === key && !location.hash, pubkey), 'unsolicited callback is rejected and stripped without switching identity');
   await second.page.locator('#amberRequest button').click();
   await second.page.evaluate(() => (window as any).AmberSigner.login());
-  await second.page.locator('#amberRequest button').first().click();
+  await openAmber(second.page);
   const expired = await second.page.evaluate(() => {
     const r = JSON.parse(localStorage.getItem('word5-amber-pending-v1')!); r.at = Date.now() - 16 * 60000;
     localStorage.setItem('word5-amber-pending-v1', JSON.stringify(r)); return r;
@@ -150,13 +181,70 @@ try {
   await second.page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${expired.id}&amber-result=${other}`);
   await second.page.waitForFunction(() => document.getElementById('amberRequest')?.textContent?.includes('Unrecognized or expired'));
   check(await second.page.evaluate(key => (window as any).NostrSession.getPlayer().linked_pubkey === key, pubkey), 'expired callback cannot replace preserved signer account');
+  await callbackRaces();
   await context.close(); await second.context.close();
 } finally { await browser.close(); server.stop(true); service.db.close(); }
 
 async function connectCompleted(page: any) {
   await page.evaluate(() => (window as any).AmberSigner.login());
-  await page.locator('#amberRequest button').first().click();
+  await openAmber(page);
   const pending = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
-  await page.goto(`${base}?return=${crypto.randomUUID()}#amber-state=${pending.id}&amber-result=${pubkey}`);
+  await page.goto('about:blank');
+  await page.goto(amberReturn(outgoing.get(page)!, pubkey));
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('words-game') || '{}').serverCompleted === true);
+}
+
+async function callbackRaces() {
+  const context = await browser.newContext();
+  await context.route('**/amber-harness', route => route.fulfill({ body: '<html><body></body></html>', contentType: 'text/html' }));
+  const page = await context.newPage();
+  await page.goto(base + 'amber-harness');
+  // Replace only the module-loading dependency to hold callback processing at its
+  // actual await boundary; use real nostr-tools verification once released.
+  await context.route('https://esm.sh/**', route => route.fulfill({ body: moduleText, contentType: 'text/javascript' }));
+  await page.evaluate(async () => {
+    const w = window as any;
+    w.__tools = await import('https://esm.sh/nostr-tools@2?bundle');
+    w.NostrSession = { getPlayer: () => JSON.parse(localStorage.getItem('race-player')!),
+      updatePlayer: (p: any) => localStorage.setItem('race-player', JSON.stringify(p)) };
+  });
+  const adapter = readFileSync(resolve(root, 'js/amber-signer.js'), 'utf8')
+    .replace("const tools = () => import('https://esm.sh/nostr-tools@2?bundle');", 'const tools = () => window.__gate;');
+  await page.addScriptTag({ content: adapter });
+  const cdp = await context.newCDPSession(page); await cdp.send('Page.enable');
+  cdp.on('Page.frameRequestedNavigation', (e: any) => { if (e.url.startsWith('intent:')) outgoing.set(page, e.url); });
+  for (const action of ['switch', 'cancel-retry']) {
+    await page.evaluate(pk => {
+      const w = window as any;
+      w.NostrSession.updatePlayer({ pubkey: pk, auth_mode: 'session' });
+      w.__gate = new Promise(resolve => { w.__release = () => resolve(w.__tools); });
+      w.AmberSigner.login();
+    }, pubkey);
+    const intent = await openAmber(page);
+    await page.evaluate(({ url, action, other }) => {
+      const w = window as any;
+      // Start restore directly so the import is guaranteed to be pending, then
+      // duplicate it as startup/pageshow can do. Both callers share one result.
+      history.replaceState(null, '', url);
+      w.__restore = w.AmberSigner.restore(w.NostrSession.getPlayer());
+      w.__duplicate = w.AmberSigner.restore(w.NostrSession.getPlayer());
+      w.__shared = w.__restore === w.__duplicate;
+      if (action === 'switch') w.NostrSession.updatePlayer({ pubkey: other, auth_mode: 'session' });
+      else { w.AmberSigner.cancel(); w.AmberSigner.login(); }
+    }, { url: amberReturn(intent, other), action, other });
+    let retryId: string | undefined;
+    if (action === 'cancel-retry') {
+      await openAmber(page);
+      retryId = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!).id);
+    }
+    const result = await page.evaluate(async () => {
+      const w = window as any; w.__release();
+      const player = await w.__restore; w.NostrSession.updatePlayer(player);
+      return { shared: w.__shared, player, pending: JSON.parse(localStorage.getItem('word5-amber-pending-v1') || 'null'), success: !!document.getElementById('amberConnected') };
+    });
+    check(result.shared && !result.success && (action === 'switch' ? result.player.pubkey === other && !result.player.linked_pubkey : result.player.pubkey === pubkey && result.pending?.id === retryId),
+      `late login callback cannot overwrite ${action === 'switch' ? 'an account switch' : 'Cancel and a newer request'} during module loading`);
+    await page.evaluate(() => (window as any).AmberSigner.cancel());
+  }
+  await context.close();
 }

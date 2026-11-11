@@ -5,6 +5,7 @@
   const PACKAGE = 'com.greenart7c3.nostrsigner';
   const TTL = 15 * 60 * 1000;
   let waiter = null;
+  let restoring = null;
   const read = key => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { return null; } };
   const identity = p => p?.linked_pubkey || p?.pubkey;
   const tools = () => import('https://esm.sh/nostr-tools@2?bundle');
@@ -42,11 +43,17 @@
       localStorage.setItem(PENDING, JSON.stringify(request));
       const callback = new URL(location.pathname, location.origin);
       callback.hash = `amber-state=${encodeURIComponent(request.id)}&amber-result=`;
-      const query = new URLSearchParams({ type: request.type, callbackUrl: callback.href,
-        returnType: request.type === 'sign_event' ? 'event' : 'signature', compressionType: 'none', appName: 'Word5' });
-      const payload = request.event ? encodeURIComponent(JSON.stringify(request.event)) : '';
-      const account = request.pubkey ? `S.current_user=${encodeURIComponent(request.pubkey)};` : '';
-      location.href = `intent:${payload}?${query}#Intent;scheme=nostrsigner;package=${PACKAGE};${account}end`;
+      // Stable Amber decodes the entire web query before splitting on & and ?.
+      // Android string extras preserve the callback and arbitrary event text intact.
+      // Browser requests still return via callbackUrl, never an activity result.
+      const extras = { type: request.type, callbackUrl: callback.href,
+        returnType: request.type === 'sign_event' ? 'event' : 'signature', compression: 'none', appName: 'Word5',
+        ...(request.pubkey ? { current_user: request.pubkey } : {}) };
+      // Older browser routing inspects decoded data for a query even with extras.
+      // JSON escapes keep literal question marks out of that routing decision.
+      const payload = request.event ? encodeURIComponent(JSON.stringify(request.event).replace(/\?/g, '\\u003f')) : '';
+      const options = Object.entries(extras).map(([key, value]) => `S.${key}=${encodeURIComponent(value)};`).join('');
+      location.href = `intent:${payload}#Intent;scheme=nostrsigner;package=${PACKAGE};${options}end`;
       text.textContent = 'Waiting for Amber. If you cancelled or returned without approval, tap Open Amber to retry or Cancel.';
     };
     const close = document.createElement('button');
@@ -57,7 +64,12 @@
     cancel();
     show({ id: crypto.randomUUID(), at: Date.now(), type: 'get_public_key', previous: identity(window.NostrSession?.getPlayer()) });
   }
-  async function restore(player) {
+  function restore(player) {
+    if (restoring) return restoring;
+    restoring = restoreReturn(player).finally(() => { restoring = null; });
+    return restoring;
+  }
+  async function restoreReturn(player) {
     const params = new URLSearchParams(location.hash.slice(1));
     if (!params.has('amber-result') && !params.has('amber-state')) {
       const pending = read(PENDING);
@@ -74,11 +86,22 @@
       const result = params.get('amber-result');
       if (!result || result.length > 24000 || result === 'rejected' || result === 'true') throw new Error('Amber request cancelled or invalid');
       const nt = await tools();
+      // Import/verification can yield while Cancel, another request or an account
+      // switch happens. A late callback must never overwrite that newer state.
+      const current = window.NostrSession?.getPlayer() || player;
+      if (read(PENDING)?.id !== pending.id) return current;
+      if (identity(current) !== identity(player)) {
+        clear();
+        if (waiter) { waiter.reject(new Error('Account changed during Amber request')); waiter = null; }
+        showError('Account changed during Amber request');
+        return current;
+      }
       if (pending.type === 'get_public_key') {
         let pubkey = result;
         if (pubkey.startsWith('npub1')) { const decoded = nt.nip19.decode(pubkey); if (decoded.type !== 'npub') throw new Error('Invalid public key'); pubkey = decoded.data; }
         if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error('Invalid Amber public key');
         clear();
+        showSuccess();
         return { ...player, auth_mode: 'amber', bunker_uri: null, linked_pubkey: pubkey,
           linked_npub: nt.nip19.npubEncode(pubkey), signer_package: PACKAGE, linked_at: Date.now() };
       }
@@ -93,11 +116,22 @@
       if (waiter) { localStorage.removeItem(RETURNED); waiter.resolve(event); waiter = null; }
       return player;
     } catch (error) {
+      // A failed asynchronous import must not cancel a newer request either.
+      if (pending && read(PENDING)?.id !== pending.id) return window.NostrSession?.getPlayer() || player;
       clear();
       if (waiter) { waiter.reject(error); waiter = null; }
       showError(error.message || String(error));
       return player;
     }
+  }
+  function showSuccess() {
+    const status = document.createElement('div');
+    status.id = 'amberConnected'; status.setAttribute('role', 'status');
+    status.style.cssText = 'position:fixed;bottom:20px;left:12px;right:12px;z-index:2000;background:#1a1a1b;color:white;padding:18px;';
+    status.textContent = 'Connected with Amber. You’re ready to play.';
+    document.getElementById(status.id)?.remove();
+    document.body.appendChild(status);
+    setTimeout(() => status.remove(), 5000);
   }
   function showError(message) {
     const panel = document.createElement('div'); panel.id = 'amberRequest';
@@ -125,9 +159,14 @@
     });
   }
   // A callback may arrive in the existing tab. A new tab/reload resumes through ensurePlayer.
-  window.addEventListener('hashchange', async () => {
+  async function resumeReturn() {
+    if (!/(^#|&)amber-(state|result)=/.test(location.hash)) return;
     const player = window.NostrSession?.getPlayer();
     if (player) { const restored = await restore(player); window.NostrSession.updatePlayer(restored); }
-  });
+  }
+  window.addEventListener('hashchange', resumeReturn);
+  window.addEventListener('pageshow', resumeReturn);
+  window.addEventListener('focus', resumeReturn);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeReturn(); });
   window.AmberSigner = { login, restore, signEvent, cancel };
 })();
