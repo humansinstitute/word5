@@ -24,6 +24,13 @@
     }
 
     async function isServerCompleted(signer, periodId) {
+      if (signer.mode === "amber") {
+        const pubkey = await signer.getPublicKey();
+        const response = await fetch(`api/player-history?pubkey=${encodeURIComponent(pubkey)}`, { cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.ok || payload.pubkey !== pubkey || payload.periodId !== periodId || typeof payload.completed !== "boolean") throw new Error("Fresh completion status unavailable; local game kept");
+        return payload.completed;
+      }
       const event = await signer.signEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
         tags: [["schema", "word5.sync-status.v1"]], content: JSON.stringify({ periodId }) });
       const response = await fetch("api/completion/status", { method: "POST", headers: { "content-type": "application/json" },
@@ -34,7 +41,7 @@
     }
 
     return window.Word5PlayerSyncCore.createController({
-      ...callbacks, storage: localStorage, verifyEvent, fetchEvents, publishEvent, isServerCompleted,
+      ...callbacks, cancelSigner: () => window.AmberSigner?.cancel(), storage: localStorage, verifyEvent, fetchEvents, publishEvent, isServerCompleted,
       getSigner: async () => {
         await window.NostrSigners?.ready?.();
         if (!window.NostrSigners) throw new Error("Nostr signer unavailable");

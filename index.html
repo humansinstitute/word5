@@ -810,13 +810,13 @@
     </div>
   </div>
 
-  <script src="js/amber-signer.js?v=20261111-5"></script>
+  <script src="js/amber-signer.js?v=20261111-6"></script>
   <script src="js/nostr-session.js?v=20261111-1"></script>
   <script src="js/visit-tracker.js?v=20260930-1"></script>
-  <script src="js/nostr-signers.js?v=20261111-1"></script>
+  <script src="js/nostr-signers.js?v=20261111-6"></script>
   <script src="js/nostr-post.js?v=20260916-2"></script>
-  <script src="js/player-sync.js?v=20261020-1"></script>
-  <script src="js/player-sync-browser.js?v=20261020-1"></script>
+  <script src="js/player-sync.js?v=20261111-6"></script>
+  <script src="js/player-sync-browser.js?v=20261111-6"></script>
   <script src="js/nostr-ui.js?v=20261111-1"></script>
   <script src="js/chat-crypto.js?v=20261005-2"></script>
   <script src="js/daily-chat.js?v=20261005-3"></script>
@@ -1602,7 +1602,21 @@
 
       const playerSyncToggle = document.getElementById('playerSyncToggle');
       const playerSyncStatus = document.getElementById('playerSyncStatus');
+      const amberSyncActions = document.createElement('div');
+      const resumeSync = document.createElement('button'), saveSync = document.createElement('button');
+      resumeSync.textContent = 'Resume encrypted sync'; saveSync.textContent = 'Save encrypted state';
+      for (const button of [resumeSync, saveSync]) { button.type = 'button'; button.className = 'nostr-btn'; amberSyncActions.append(button); }
+      playerSyncStatus.after(amberSyncActions);
+      async function amberSyncAction(action) {
+        resumeSync.disabled = saveSync.disabled = true;
+        try { await action(); } catch (_) { /* Controller reports failure while keeping local state. */ }
+        finally { resumeSync.disabled = saveSync.disabled = false; }
+      }
+      resumeSync.onclick = () => amberSyncAction(() => word5Sync.enable());
+      saveSync.onclick = () => amberSyncAction(() => word5Sync.saveLocal());
+
       const updateSyncStatus = (detail) => {
+        amberSyncActions.hidden = window.NostrSession?.getPlayer()?.auth_mode !== 'amber';
         playerSyncToggle.checked = Boolean(detail.enabled);
         playerSyncStatus.textContent = detail.message || 'Encrypted sync is off';
         playerSyncStatus.style.color = ['error', 'unsupported', 'partial'].includes(detail.state) ? '#f97316' : '';
@@ -1637,7 +1651,12 @@
         finally { playerSyncToggle.disabled = false; }
       });
       await setupPlayerSync();
-      window.addEventListener('player-ready', () => { void setupPlayerSync(); });
+      let syncIdentity = window.NostrSession?.getPlayer()?.linked_pubkey || window.NostrSession?.getPlayer()?.pubkey;
+      let syncMode = window.NostrSession?.getPlayer()?.auth_mode;
+      window.addEventListener('player-ready', () => {
+        const p = window.NostrSession?.getPlayer(); const next = p?.linked_pubkey || p?.pubkey;
+        if (next !== syncIdentity || p?.auth_mode !== syncMode) { syncIdentity = next; syncMode = p?.auth_mode; void setupPlayerSync(); }
+      });
 
       // Background sync stats from Nostr (store promise so win handler can await it)
       _nostrSyncPromise = syncStatsFromNostr();

@@ -13,7 +13,7 @@ function adapter() {
   const player = { auth_mode: 'amber', linked_pubkey: 'a'.repeat(64) };
   const location = { pathname: '/word5/', origin: 'https://otherstuff.ai', href: '', hash: '' };
   const window = { NostrSession: { getPlayer: () => player }, addEventListener() {} } as any;
-  runInNewContext(readFileSync('js/amber-signer.js', 'utf8'), { window, document, location, URL, URLSearchParams, crypto,
+  runInNewContext(readFileSync('js/amber-signer.js', 'utf8'), { window, document, location, URL, URLSearchParams, crypto, TextEncoder, atob,
     localStorage: { getItem: (k: string) => storage.get(k), setItem: (k: string, v: string) => storage.set(k, v), removeItem: (k: string) => storage.delete(k) } });
   return { window, location, storage, open: () => elements.get('amberRequest').children[1].onclick(),
     manual: () => { const panel = elements.get('amberRequest'); panel.children[2].onclick(); panel.children[3].children[1].onclick(); } };
@@ -74,5 +74,26 @@ test('manual mode launches actual request without callback and requests public k
       expect(parsed.params.returnType).toBe(signing ? 'event' : 'signature');
       if (signing) expect(parsed.event).toEqual(request.event);
     }
+  }
+});
+
+
+test('actual NIP44 requests use text payload, separate peer/account extras and scalar returns', async () => {
+  for (const type of ['nip44Encrypt', 'nip44Decrypt']) {
+    const a = adapter();
+    const payload = type === 'nip44Encrypt' ? 'Unicode 🧡 plus+ percent%26 and& punctuation;#=' : btoa(String.fromCharCode(2) + 'x'.repeat(98));
+    void a.window.AmberSigner[type]('b'.repeat(64), payload);
+    await new Promise(resolve => setTimeout(resolve, 5)); a.open();
+    for (const applicationId of [true, false]) {
+      const parsed = parseAmber(a.location.href, 'v6.6.9', applicationId);
+      expect(parsed.payload).toBe(payload);
+      expect(parsed.params.pubkey).toBe('b'.repeat(64));
+      expect(parsed.params.current_user).toBe('a'.repeat(64));
+      expect(parsed.params.type).toBe(type === 'nip44Encrypt' ? 'nip44_encrypt' : 'nip44_decrypt');
+      expect(parsed.params.returnType).toBe('signature');
+      const callback = new URL(amberReturn(a.location.href, 'scalar text & + %'));
+      expect(new URLSearchParams(callback.hash.slice(1)).get('amber-result')).toBe('scalar text & + %');
+    }
+    expect(JSON.stringify(JSON.parse(a.storage.get('word5-amber-pending-v1')!))).not.toContain(payload);
   }
 });

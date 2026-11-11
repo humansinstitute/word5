@@ -121,3 +121,45 @@ describe("encrypted NIP-78 player sync", () => {
     expect(h.events).toHaveLength(0);
   });
 });
+
+test("Amber init and local checkpoints wait for explicit actions; rejected proof is retryable", async () => {
+  const h = harness();
+  let encryptions = 0;
+  const signer = { ...h.identity.signer, mode: 'amber', nip44Encrypt: async (pk: string, p: string) => {
+    encryptions++; if (encryptions === 1) throw new Error('Permission cancelled'); return h.identity.signer.nip44Encrypt(pk, p);
+  }};
+  const c = core.createController({ ...h.options, getSigner: async () => signer });
+  await c.init(); expect(encryptions).toBe(0);
+  await expect(c.enable()).rejects.toThrow('Permission cancelled');
+  expect(h.statuses.at(-1).state).toBe('error');
+  await c.enable(); const count = encryptions;
+  c.checkpointSettings(true, 100); await new Promise(r => setTimeout(r, 5));
+  expect(encryptions).toBe(count); expect(h.events).toHaveLength(0);
+});
+
+test("disabling while signer resolves cannot enable or persist a late opt-in", async () => {
+  const h = harness(); let release!: () => void;
+  const gate = new Promise<void>(r => release = r);
+  const c = core.createController({ ...h.options, getSigner: async () => { await gate; return { ...h.identity.signer, mode: 'amber' }; } });
+  const work = c.enable(); c.disable(); release();
+  await expect(work).rejects.toThrow();
+  expect(c.isEnabled()).toBe(false);
+  expect(h.storage.getItem(`word5-sync-enabled:${h.identity.pubkey}`)).toBeNull();
+});
+
+test("Amber rechecks fresh completion after decrypt and disposal invalidates a false completion response", async () => {
+  for (const dispose of [false, true]) {
+    const h = harness();
+    h.events.push(await h.identity.signer.signEvent({ kind: 30078, created_at: 123,
+      tags: [['d', 'word5:game:123:v1'], ['schema', 'word5.encrypted-state.v1']],
+      content: await h.identity.signer.nip44Encrypt(h.identity.pubkey, JSON.stringify(core.makeGame(123, ['BRAVE'], false, 999))) }));
+    let checks = 0, release!: () => void, reached!: () => void;
+    const gate = new Promise<void>(r => release = r), second = new Promise<void>(r => reached = r);
+    const c = core.createController({ ...h.options, getSigner: async () => ({ ...h.identity.signer, mode: 'amber' }),
+      isServerCompleted: async () => { if (++checks === 2) { reached(); await gate; return !dispose; } return false; } });
+    const work = c.enable(); await second;
+    if (dispose) c.dispose(); release();
+    if (dispose) await expect(work).rejects.toThrow(); else await work;
+    expect(h.local.guesses).toEqual([]);
+  }
+});

@@ -34,8 +34,8 @@ export function parseAmber(uri: string, version = 'v6.6.9', browserApplicationId
       }
     } else params = intent.extras; // Native fallback is supported for browser callers.
   } else params = intent.extras;
-  if (!['get_public_key', 'sign_event'].includes(params.type)) throw new Error('Amber: unknown signer type');
-  return { ...intent, params, event: params.type === 'sign_event' ? JSON.parse(payload) : null };
+  if (!['get_public_key', 'sign_event', 'nip44_encrypt', 'nip44_decrypt'].includes(params.type)) throw new Error('Amber: unknown signer type');
+  return { ...intent, params, payload, event: params.type === 'sign_event' ? JSON.parse(payload) : null };
 }
 export function amberReturn(uri: string, value: string, signedEvent?: unknown, version = 'v6.6.9', applicationId = true) {
   const { params } = parseAmber(uri, version, applicationId);

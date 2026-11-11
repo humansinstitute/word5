@@ -327,7 +327,7 @@ async function manualRecovery() {
   await button('Return result manually').click();
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { (window as any).__diagnostic = value; } } }));
   await button('Copy connection status').click();
-  check(await page.evaluate(() => /^Word5 20261111-5; stage=[a-z-]+; error=[a-z-]+$/.test((window as any).__diagnostic)), 'diagnostic export contains only version, stage and fixed error code');
+  check(await page.evaluate(() => /^Word5 20261111-6; stage=[a-z-]+; error=[a-z-]+$/.test((window as any).__diagnostic)), 'diagnostic export contains only version, stage and fixed error code');
   await page.locator('#amberManualResult').fill(pubkey);
   await page.evaluate(async () => {
     const use = Array.from(document.querySelectorAll('#amberRequest button')).find(e => e.textContent === 'Use result') as HTMLButtonElement;

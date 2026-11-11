@@ -65,8 +65,15 @@
     if (!window.NostrSession) throw new Error("NostrSession unavailable");
     const player = getPlayer ? getPlayer() : null;
     if (player?.auth_mode === "amber") {
-      return { getPublicKey: async () => player.linked_pubkey,
-        signEvent: event => window.AmberSigner.signEvent(event), mode: "amber" };
+      const active = () => {
+        const current = getPlayer();
+        if (current?.auth_mode !== "amber" || current.linked_pubkey !== player.linked_pubkey) throw new Error("Amber account changed; retry with the current account");
+      };
+      const call = async (method, ...args) => { active(); const result = await window.AmberSigner[method](...args); active(); return result; };
+      return { getPublicKey: async () => { active(); return player.linked_pubkey; },
+        signEvent: event => call("signEvent", event),
+        nip44Encrypt: (peer, text) => call("nip44Encrypt", peer, text),
+        nip44Decrypt: (peer, text) => call("nip44Decrypt", peer, text), mode: "amber" };
     }
     if (
       player?.auth_mode === "nip07" &&
