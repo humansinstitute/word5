@@ -48,7 +48,7 @@ class Backup(private val amber: NativeSigner, private val rules: Rules, private 
         val b = Baseline(h.longValue("periodId"), stats.longValue("played").toInt(), stats.longValue("won").toInt(), stats.longValue("streak").toInt(), stats.longValue("maxStreak").toInt(), if(h.isNull("lastPeriodId")) null else h.longValue("lastPeriodId"), if(h.isNull("currentResult")) null else h.getString("currentResult"),
             h.getJSONArray("coveredPeriods").let { a -> (0 until a.length()).map { a.getLong(it) } },
             h.getJSONArray("distribution").let { a -> require(a.length() == 6); (0..5).map { a.getInt(it) } },
-            h.getJSONArray("outcomes").let { a -> (0 until a.length()).associate { i -> a.getJSONArray(i).let { it.getLong(0) to it.getInt(1) } } }, if(h.isNull("correctionEventId")) null else h.getString("correctionEventId"), if(h.isNull("correctionCreatedAt")) null else h.longValue("correctionCreatedAt"))
+            h.getJSONArray("outcomes").let { a -> (0 until a.length()).associate { i -> a.getJSONArray(i).let { it.getLong(0) to it.getInt(1) } } }, if(h.isNull("correctionEventId")) null else h.getString("correctionEventId"), if(h.isNull("correctionCreatedAt")) null else h.longValue("correctionCreatedAt"), if(h.isNull("correctionAnchor")) null else Codec.correctionAnchor(h.getJSONObject("correctionAnchor")))
         // Apply the same strict baseline bounds as encrypted restores.
         Codec.decode(Codec.encode(State(baseline = b), owner), owner, rules)
         return b

@@ -16,3 +16,10 @@ fun amberPublicKey(value: String): String {
     require(result.size == 32 && bits < 5 && ((buffer shl (8 - bits)) and 255) == 0)
     return result.joinToString("") { "%02x".format(it) }
 }
+fun encodeNpub(hex:String):String {
+    val alphabet="qpzry9x8gf2tvdw0s3jn54khce6mua7l";val data=mutableListOf<Int>();var buffer=0;var bits=0
+    unhex(hex).forEach { buffer=(buffer shl 8) or (it.toInt() and 255);bits+=8;while(bits>=5){bits-=5;data.add((buffer ushr bits) and 31)} };if(bits>0)data.add((buffer shl (5-bits)) and 31)
+    var checksum=1;val generators=intArrayOf(0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3)
+    ("npub".map{it.code shr 5}+0+"npub".map{it.code and 31}+data+List(6){0}).forEach{v->val top=checksum ushr 25;checksum=((checksum and 0x1ffffff) shl 5) xor v;(0..4).forEach{i->if((top ushr i) and 1 !=0)checksum=checksum xor generators[i]}}
+    checksum=checksum xor 1;return "npub1"+(data+(0..5).map{(checksum ushr (5*(5-it))) and 31}).joinToString(""){alphabet[it].toString()}
+}

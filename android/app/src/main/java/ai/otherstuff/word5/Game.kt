@@ -31,10 +31,10 @@ class Rules(val answers: List<String>, words: List<String>) {
     fun hardError(previous: List<String>, guess: String, target: String): String? {
         for (old in previous) {
             val marks = evaluate(old, target)
-            old.indices.forEach { if (marks[it] == 2 && guess[it] != old[it]) return "Letter ${it + 1} must be ${old[it]}" }
+            old.indices.forEach { if (marks[it] == 2 && guess[it] != old[it]) return "${it + 1}${if(it==0)"st" else if(it==1)"nd" else if(it==2)"rd" else "th"} letter must be ${old[it]}" }
             old.toSet().forEach { letter ->
                 val count = old.indices.count { old[it] == letter && marks[it] > 0 }
-                if (guess.count { it == letter } < count) return "Guess must contain $count $letter"
+                if (guess.count { it == letter } < count) return "Guess must contain $letter"
             }
         }
         return null
@@ -50,8 +50,10 @@ class Rules(val answers: List<String>, words: List<String>) {
     }
 }
 data class Game(val period: Long, val guesses: List<String> = emptyList(), val hard: Boolean = false, val outcome: Int? = null)
-data class Baseline(val through: Long, val played: Int, val won: Int, val streak: Int, val maxStreak: Int, val lastPeriod: Long?, val todayResult: String? = null, val covered: List<Long> = emptyList(), val distribution: List<Int> = List(6) { 0 }, val outcomes: Map<Long, Int> = emptyMap(), val correction: String? = null, val correctionCreated: Long? = null)
-data class State(val games: Map<Long, Game> = emptyMap(), val hard: Boolean = false, val baseline: Baseline? = null, val hardUpdated: Long = 0) {
+/** Exact pre-replay public correction seed, authenticated by native history/backup envelopes. */
+data class CorrectionAnchor(val streak: Int, val maxStreak: Int, val lastPeriod: Long?, val covered: Set<Long> = emptySet())
+data class Baseline(val through: Long, val played: Int, val won: Int, val streak: Int, val maxStreak: Int, val lastPeriod: Long?, val todayResult: String? = null, val covered: List<Long> = emptyList(), val distribution: List<Int> = List(6) { 0 }, val outcomes: Map<Long, Int> = emptyMap(), val correction: String? = null, val correctionCreated: Long? = null, val correctionAnchor: CorrectionAnchor? = null)
+data class State(val games: Map<Long, Game> = emptyMap(), val hard: Boolean = false, val baseline: Baseline? = null, val hardUpdated: Long = 0, val correction: CorrectionOverlay? = null) {
     fun current() = games[Rules.period()] ?: Game(Rules.period(), hard = hard)
     fun with(game: Game) = copy(games = games + (game.period to game))
 }
@@ -80,7 +82,8 @@ fun statistics(state: State, rules: Rules, today: Long = Rules.period()): Stats 
         previous = period
     }
     if (last == null || last < today - 1) streak = 0
-    return Stats(played, won, streak, best, distribution)
+    val corrected = correctedStreaks(state, rules, today)
+    return Stats(played, won, corrected?.first ?: streak, corrected?.second ?: best, distribution)
 }
 /** Server's completed record is immutable. Concurrent unfinished branches use longest then lexical order. */
 fun merge(local: State, remote: State, rules: Rules): State {
@@ -99,7 +102,8 @@ fun merge(local: State, remote: State, rules: Rules): State {
     }
     val preference = if (local.hardUpdated > remote.hardUpdated) local else remote
     val baseline = remote.baseline?.let { refreshBaseline(local.baseline, it) } ?: local.baseline
-    return State(games, preference.hard, baseline, preference.hardUpdated)
+    val correction = Corrections.newest(local.correction, remote.correction)
+    return State(games, preference.hard, baseline, preference.hardUpdated, correction)
 }
 
 /** Older completed games retain every outcome; current/recent and unfinished guesses remain exact. */
@@ -113,5 +117,8 @@ fun refreshBaseline(old: Baseline?, fresh: Baseline): Baseline {
     val newerCorrection = fresh.correctionCreated != null && (old.correctionCreated == null || fresh.correctionCreated > old.correctionCreated || (fresh.correctionCreated == old.correctionCreated && fresh.correction.orEmpty() > old.correction.orEmpty()))
     val explicitCorrection = fresh.correction != null && fresh.correction != old.correction && newerCorrection && fresh.through >= old.through
     val advances = fresh.correction == old.correction && fresh.correctionCreated == old.correctionCreated && fresh.through >= old.through && fresh.played >= old.played && fresh.won >= old.won && fresh.covered.containsAll(old.covered)
-    return if(explicitCorrection || advances) fresh else old
+    return if(explicitCorrection || advances) {
+        // Older servers/saves may omit the seed; an advance of the same correction cannot erase it.
+        if (advances && fresh.correctionAnchor == null) fresh.copy(correctionAnchor=old.correctionAnchor) else fresh
+    } else old
 }
