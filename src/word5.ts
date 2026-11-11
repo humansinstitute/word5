@@ -548,7 +548,7 @@ export class Word5Service {
   }
 
   // Return only the restoration summary. Detailed unpublished completion records stay private.
-  playerHistory(pubkey: string, now = Date.now()) {
+  playerHistory(pubkey: string, now = Date.now(), nativeBaseline = false) {
     if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error("Invalid player pubkey");
     const current = getCurrentPeriodId(now);
     const publicRows = this.db.query(`SELECT event_id AS eventId,event_type AS eventType,
@@ -598,6 +598,12 @@ export class Word5Service {
     return { ok: true, pubkey, periodId: current, stats, lastPeriodId,
       lastPuzzle: lastPeriodId === null ? null : lastPeriodId % 1000,
       completed: byPeriod.has(current), currentResult: byPeriod.get(current)?.result ?? null,
+      ...(nativeBaseline ? {
+        correctionCreatedAt: correction?.createdAt ?? null,
+        outcomes: rows.map(row => [row.periodId, row.result === "X" ? 7 : Number(row.result)]),
+        coveredPeriods: [...new Set([...rows.map(row => row.periodId), ...baselinePeriods])].sort((a,b) => a-b),
+        distribution: [1,2,3,4,5,6].map(attempt => rows.filter(row => row.result === String(attempt)).length),
+      } : {}),
       basis: "server-archive", correctionEventId: correction?.eventId ?? null, historyCount: rows.length };
   }
 

@@ -81,4 +81,17 @@ describe('authoritative player history', () => {
     expect(() => f.service.playerHistory('bad')).toThrow('pubkey');
     f.service.db.close();
   });
+  test('native authenticated baseline contains known outcomes without expanding public history', () => {
+    const f = fixture(); f.complete(21000); f.service.socialHistory.archive(f.publicScore(20999,'3'));
+    const native = f.service.playerHistory(f.pubkey,21000*86400000+30000,true) as any;
+    expect(native.coveredPeriods).toEqual([20999,21000]);
+    expect(native.outcomes).toEqual([[20999,3],[21000,1]]);
+    expect(native.distribution).toEqual([1,0,1,0,0,0]);
+    const publicSummary = f.service.playerHistory(f.pubkey,21000*86400000+30000);
+    expect(publicSummary).not.toHaveProperty('coveredPeriods');
+    expect(publicSummary).not.toHaveProperty('outcomes');
+    expect(publicSummary).not.toHaveProperty('distribution');
+    f.service.db.close();
+  });
+
 });

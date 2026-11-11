@@ -1,0 +1,15 @@
+repository: https://github.com/humansinstitute/word5
+pubkey: npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy
+name: Word5
+summary: A daily word puzzle with private Amber-encrypted saves
+description: |
+  A native daily five-letter word puzzle: six tries, a new puzzle at midnight UTC,
+  hard mode, statistics and a shareable result grid. Play offline. Sign in only
+  with Amber to automatically restore and back up your statistics, completed
+  outcomes and unfinished game with NIP-44 encryption. Private saves stay private;
+  sharing a result is an explicit action. Remember Amber permissions for automatic
+  synchronization. Older completed games retain outcomes rather than exact guesses.
+website: https://otherstuff.ai/word5/
+icon: app/src/main/res/mipmap-hdpi/ic_launcher.png
+tags: [games, puzzle, nostr]
+changelog: CHANGELOG.md

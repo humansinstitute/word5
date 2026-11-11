@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
+import { NativeBackup, backupRequest, BackupError } from "./native-backup";
 import { DailyChat } from "./chat";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
@@ -40,6 +41,7 @@ async function catchUpSocialHistory() {
 }
 setTimeout(() => void catchUpSocialHistory(), 1_000);
 setInterval(() => void catchUpSocialHistory(), 15 * 60 * 1000);
+const nativeBackup = service.secretKey ? new NativeBackup(service.db, service.secretKey, (pubkey) => service.playerHistory(pubkey, Date.now(), true)) : null;
 const chat = new DailyChat(service);
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
 const scoreAnnouncer = new ScoreAnnouncer(service.db, service.secretKey, RELAYS);
@@ -130,6 +132,11 @@ const server = Bun.serve({
         return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", scoreRecap: scoreAnnouncer.status(),
           publicData: publicDataPublisher.status(),
           socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
+      }
+      if ((url.pathname === "/api/native-backup/read" || url.pathname === "/api/native-backup/write") && req.method === "POST") {
+        if (!nativeBackup) return json({error: "Encrypted backup unavailable"}, {status: 503});
+        try { return json({ event: await backupRequest(req, nativeBackup, process.env.WORD5_PUBLIC_BASE || "https://otherstuff.ai/word5/") }); }
+        catch (error) { return json({ error: error instanceof BackupError ? error.message : "Backup request rejected" }, {status: error instanceof BackupError ? error.status : 400}); }
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
