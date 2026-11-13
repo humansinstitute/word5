@@ -156,6 +156,7 @@ class MainActivity: ComponentActivity() {
                             }
                         }
                         Copy("Next word in: $countdown",14,Muted,modifier=Modifier.padding(vertical=8.dp))
+                        if(m.completed()) WebButton("View result / Post to Nostr",Modifier.padding(bottom=8.dp),color=Purple) { m.reopenResult() }
                         if(m.profileName.isNotBlank()) Copy(m.profileName,14,Muted,modifier=Modifier.padding(bottom=8.dp))
                     }
                     Column(Modifier.fillMaxWidth().padding(start=20.dp,end=20.dp,bottom=16.dp,top=8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
@@ -183,6 +184,7 @@ class MainActivity: ComponentActivity() {
                     WebButton(if(m.owner.isEmpty()) "Login with Amber" else "Switch Amber account",Modifier.fillMaxWidth().padding(bottom=6.dp),color=Purple) { menu=false;m.login() }
                     WebButton("My Profile",Modifier.fillMaxWidth().padding(bottom=6.dp)) { menu=false;modal="profile" }
                     WebButton("New Player",Modifier.fillMaxWidth().padding(bottom=6.dp)) { menu=false;modal="new" }
+                    if(m.completed()) WebButton("Today’s result / Post to Nostr",Modifier.fillMaxWidth().padding(bottom=6.dp),color=Purple) { menu=false;m.reopenResult() }
                     WebButton("Check my streak",Modifier.fillMaxWidth().padding(top=8.dp,bottom=6.dp),color=Purple) { menu=false;modal="stats";m.sync() }
                     WebButton("Donate ⚡",Modifier.fillMaxWidth().padding(top=4.dp,bottom=6.dp),color=Orange) { menu=false;modal="donate" }
                     Copy("Version ${BuildConfig.VERSION_NAME}",11,Muted,modifier=Modifier.fillMaxWidth().padding(top=8.dp),align=TextAlign.Center)
@@ -202,7 +204,7 @@ class MainActivity: ComponentActivity() {
                 if(m.donationDue) { Spacer(Modifier.height(16.dp));RuleLine();Copy("Word5 is a free game, but hosted on real servers. If you find it valuable, please consider donating",14,Muted,modifier=Modifier.padding(vertical=12.dp),align=TextAlign.Center);WebButton("Donate",Modifier.fillMaxWidth(),color=Orange) { modal="donate" } }
                 Row(Modifier.fillMaxWidth().padding(top=16.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                     WebButton("Share",Modifier.weight(1f),primary=true,onClick=share)
-                    WebButton("Post to Nostr",Modifier.weight(1f),color=Color(0xFF8B5CF6),primary=true) { modal="post" }
+                    WebButton(m.publicationActionLabel(),Modifier.weight(1f),color=Color(0xFF8B5CF6),primary=true) { modal="post" }
                 }
                 Spacer(Modifier.height(8.dp))
                 WebButton("Retry score / restore history",Modifier.fillMaxWidth(),primary=true) { modal="score" }

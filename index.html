@@ -676,6 +676,7 @@
         <button id="loginNostrBtn" class="nostr-btn" style="background:#9333ea;">Login Nostr</button>
         <button id="profileOpenBtn" class="nostr-btn">My Profile</button>
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
+        <button id="menuResultBtn" class="nostr-btn" hidden>Today’s result / Post to Nostr</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
         <div class="app-version">Version 20261020-1</div>
@@ -696,6 +697,7 @@
       <div class="board" id="board"></div>
       <div class="timer" id="timer">Next word in: --:--:--</div>
       <div class="timer-identity" id="timerIdentityLabel" hidden></div>
+      <button id="reopenResultBtn" class="nav-link" style="background:transparent;border:1px solid #9333ea;color:#c084fc;" hidden>View result / Post to Nostr</button>
     </div>
     <div class="keyboard" id="keyboard"></div>
   </div>
@@ -1063,6 +1065,7 @@
 
     // Update board display
     function updateBoard() {
+      updateResultRecovery();
       const rows = boardEl.querySelectorAll('.row');
 
       // Update completed guesses
@@ -1386,7 +1389,15 @@
       applyRepairedStats,
     };
 
+    function updateResultRecovery() {
+      for (const id of ['reopenResultBtn', 'menuResultBtn']) {
+        document.getElementById(id).hidden = !state.gameOver;
+      }
+    }
+
     function showResult() {
+      if (!state.gameOver) return;
+      updateResultRecovery();
       const resultDisplayCount = Number(localStorage.getItem('word5-result-display-count') || 0) + 1;
       localStorage.setItem('word5-result-display-count', String(resultDisplayCount));
 
@@ -1533,6 +1544,8 @@
     function changeGameIdentity() {
       const next = activeGameIdentity();
       if (!next || next === gameOwner) return;
+      resultModal.classList.remove('visible');
+      document.getElementById('nostrPostCancelBtn').click();
       saveState(); // Save the outgoing account before selecting the new one.
       gameOwner = next;
       window.AmberSigner?.cancel();
@@ -1680,6 +1693,14 @@
         }
       });
 
+      for (const id of ['reopenResultBtn', 'menuResultBtn']) {
+        document.getElementById(id).addEventListener('click', () => {
+          document.getElementById('nostrAvatarDropdown').classList.remove('open');
+          showResult();
+        });
+      }
+      updateResultRecovery();
+
       // Share button
       shareBtn.addEventListener('click', () => {
         const text = generateShareText();
@@ -1700,6 +1721,26 @@
       const postStatus = document.getElementById('postStatus');
       const scoreStatus = document.getElementById('scoreStatus');
       let completionPromise = null;
+      let posting = false;
+      const publicationKey = () => `word5-publication-${state.periodId}-${gameOwner}`;
+      function savedPublication() {
+        for (const key of [publicationKey(), `word5-publication-${state.periodId}`]) {
+          try {
+            const event = JSON.parse(localStorage.getItem(key) || 'null');
+            if (event?.pubkey === gameOwner && event.kind === 1 && event.tags?.some(t => t[0] === 'period' && t[1] === String(state.periodId))) return event;
+          } catch (_) {}
+        }
+        return null;
+      }
+      function updatePublicationStatus() {
+        const posted = savedPublication();
+        postNostrBtn.textContent = posted ? 'Retry score link' : 'Post to Nostr';
+        postStatus.textContent = posted ? 'Already posted to Nostr · retry only links the existing post to your score.' : '';
+      }
+      window.addEventListener('player-ready', updatePublicationStatus);
+      document.getElementById('reopenResultBtn').addEventListener('click', updatePublicationStatus);
+      document.getElementById('menuResultBtn').addEventListener('click', updatePublicationStatus);
+      updatePublicationStatus();
       const completionKey = () => { const p=window.NostrSession?.getPlayer?.(); return `word5-completion-${state.periodId}-${p?.linked_pubkey || p?.pubkey || 'anonymous'}`; };
 
       recordCompletedScore = async function () {
@@ -1765,7 +1806,7 @@
       window.addEventListener("player-ready", () => { if (state.gameOver && !state.serverCompleted) void recordCompletedScore(); });
       if (state.gameOver) {
         void recordCompletedScore().then(async (saved) => {
-          const posted = JSON.parse(localStorage.getItem(`word5-publication-${state.periodId}`) || 'null');
+          const posted = savedPublication();
           if (saved && posted) {
             try {
               await WORD5_SERVER_API.send('api/publication', posted);
@@ -1870,6 +1911,22 @@
       }
 
       postNostrBtn.addEventListener('click', async () => {
+        if (posting || !state.gameOver) return;
+        const account = gameOwner, period = state.periodId;
+        const existing = savedPublication();
+        if (existing) {
+          posting = true;
+          try {
+            const saved = await recordCompletedScore();
+            if (account !== gameOwner || period !== state.periodId) return;
+            if (saved || state.serverCompleted) {
+              await WORD5_SERVER_API.send('api/publication', existing);
+              postStatus.textContent = 'Already posted to Nostr · score linked';
+            }
+          } catch (error) { postStatus.textContent = `Already posted · score link pending: ${error.message || error}`; }
+          finally { posting = false; }
+          return;
+        }
         if (!window.NostrPost || !window.NostrSigners) {
           showToast('Nostr not ready');
           return;
@@ -1877,7 +1934,8 @@
 
         const content = generateShareText();
 
-        if (!(await confirmNostrPost(content))) return;
+        posting = true;
+        if (!(await confirmNostrPost(content)) || account !== gameOwner || period !== state.periodId) { posting = false; return; }
 
         postStatus.textContent = 'Posting...';
 
@@ -1916,6 +1974,7 @@
           };
 
           const signed = await signer.signEvent(unsigned);
+          if (account !== gameOwner || signed.pubkey !== account || period !== state.periodId) throw new Error('Account changed; reopen your result');
           const pubPromises = pool.publish(relays, signed);
 
           // nostr-tools v2: publish() returns array of promises
@@ -1927,7 +1986,9 @@
           if (!succeeded) {
             throw new Error('No relay confirmed the post (timeout or all failed)');
           }
-          localStorage.setItem(`word5-publication-${state.periodId}`, JSON.stringify(signed));
+          localStorage.setItem(`word5-publication-${period}-${account}`, JSON.stringify(signed));
+          if (account !== gameOwner || period !== state.periodId) return;
+          postNostrBtn.textContent = 'Retry score link';
 
           postStatus.textContent = `Posted via ${signer.mode}`;
           showToast('Posted to Nostr!');
@@ -1950,7 +2011,7 @@
           console.error('Nostr post failed:', e);
           postStatus.textContent = `Failed: ${e.message || e}`;
           showToast('Post failed');
-        }
+        } finally { posting = false; }
       });
 
       // Help modal

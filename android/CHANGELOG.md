@@ -1,3 +1,7 @@
+# 1.0.3
+
+Completed games now keep a View result / Post to Nostr action below the board and in the menu, including after closing dialogs or returning from Social. Posting still requires preview and confirmation. Existing pending score links reuse the confirmed post; successful publication is retained per account and puzzle. The release is named Word5 without Test. Existing account saves and encrypted backup are preserved.
+
 # 1.0.2-test
 
 Closing a nested result action now returns to the result underneath, matching the web app. Includes Back, outside dismissal and Donate/Score close paths. The prior TEST build remains an immutable published artifact.

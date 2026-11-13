@@ -32,6 +32,9 @@ class GameModel(app: Application): AndroidViewModel(app) {
     var resultOpen by mutableStateOf(false)
     var donationDue by mutableStateOf(false); private set
     private fun openResult() { val count=prefs.getInt("resultDisplays",0)+1;prefs.edit().putInt("resultDisplays",count).apply();donationDue=count%6==0;resultOpen=true }
+    fun reopenResult() { if(completed()) openResult() }
+    private fun publishedKey(account: String = owner, period: Long = state.current().period) = "published-$account-$period"
+    fun publicationActionLabel(): String = if(prefs.contains(publishedKey())) "Posted to Nostr" else if(prefs.contains("publication-$owner-${state.current().period}")) "Retry score link" else "Post to Nostr"
     fun notify(text: String) { notice = text; noticeSerial++ }
     fun resultCount(): Int = state.current().let { g -> g.outcome ?: if(rules.won(g)) g.guesses.size else if(state.baseline?.through == Rules.period()) state.baseline?.todayResult?.toIntOrNull() ?: 7 else 7 }
     var profileName by mutableStateOf(""); private set
@@ -188,19 +191,23 @@ class GameModel(app: Application): AndroidViewModel(app) {
     }
     fun postResult() = publicAction { account ->
         check(completed()) { "Finish today's game first" }
+        check(!prefs.contains(publishedKey())) { "This result is already posted to Nostr" }
         val draft = resultPostDraft(state,rules,account)
-        val pendingKey="publication-$account-${state.current().period}"
+        val period = state.current().period
+        val confirmedKey = publishedKey(account,period)
+        val pendingKey="publication-$account-$period"
         val pending=prefs.getString(pendingKey,null)?.let { runCatching { Event.parse(org.json.JSONObject(it)) }.getOrNull() }?.takeIf { it.verified() && it.pubkey==account && it.kind==1 && it.tag("period")==draft.tag("period") && it.tag("result")==draft.tag("result") }
         val event = pending ?: amber.sign(draft)
-        check(owner==account)
+        check(owner==account && state.current().period==period) { "Account or puzzle changed; reopen the result" }
         if(pending==null) { PublicNostr.publish(event);prefs.edit().putString(pendingKey,event.json().toString()).apply() }
-        val linked = runCatching { submitPublicScore(account); PublicNostr.api("api/publication", event);prefs.edit().remove(pendingKey).apply() }.onFailure { if(it is CancellationException)throw it }
+        val linked = runCatching { submitPublicScore(account); PublicNostr.api("api/publication", event);prefs.edit().putString(confirmedKey,event.json().toString()).remove(pendingKey).apply() }.onFailure { if(it is CancellationException)throw it }
         if(linked.isSuccess) "Posted to Nostr · score recorded" else "Posted to Nostr · score link pending: ${linked.exceptionOrNull()?.message}"
     }
     fun recordScore() = publicAction { account ->
         submitPublicScore(account)
         val key="publication-$account-${state.current().period}"
-        prefs.getString(key,null)?.let { raw -> val event=Event.parse(org.json.JSONObject(raw));require(event.verified() && event.pubkey==account && event.kind==1);PublicNostr.api("api/publication",event);prefs.edit().remove(key).apply() }
+        val confirmedKey=publishedKey(account)
+        prefs.getString(key,null)?.let { raw -> val event=Event.parse(org.json.JSONObject(raw));require(event.verified() && event.pubkey==account && event.kind==1);PublicNostr.api("api/publication",event);prefs.edit().putString(confirmedKey,event.json().toString()).remove(key).apply() }
         "Score recorded publicly"
     }
     private suspend fun submitPublicScore(account: String) {
