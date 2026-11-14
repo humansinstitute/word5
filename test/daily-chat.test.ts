@@ -25,8 +25,9 @@ function event(sk:Uint8Array,action='rooms',fields={},at=now) {return finalizeEv
 function rooms(chat:DailyChat,sk:Uint8Array,at=now) {return (chat.request(event(sk,'rooms',{},at),'rooms',at) as any).rooms;}
 test('win and exhausted guesses unlock a consistent shared key; other dates have independent keys and refetch survives restart',()=>{
  const {service,chat}=fixture(), a=generateSecretKey(),b=generateSecretKey();finish(service,a);finish(service,b,period,true);finish(service,a,period-1);
- const aa=rooms(chat,a),bb=rooms(chat,b);expect(aa).toHaveLength(2);expect(bb).toHaveLength(1);expect(aa[0].key).toBe(bb[0].key);expect(aa[0].key).not.toBe(aa[1].key);
+ const aa=rooms(chat,a),bb=rooms(chat,b);expect(aa).toHaveLength(1);expect(bb).toHaveLength(1);expect(aa[0].key).toBe(bb[0].key);expect(aa[0].word).toBe(getWordForPeriod(service.answers,period));
  expect(rooms(new DailyChat(service),a)[0].key).toBe(aa[0].key);
+ finish(service,a,period+1);expect(rooms(chat,a,(period+1)*PERIOD_MS+200000)[0].key).not.toBe(aa[0].key);
 });
 test('unsigned, forged identity, stale, wrong action, replay and incomplete requests rejected; public legacy scores do not qualify',()=>{
  const {service,chat}=fixture(),sk=generateSecretKey(),other=generateSecretKey();finish(service,sk);
@@ -45,16 +46,16 @@ test('encrypted roundtrip retains signed ciphertext only, rejects tampering, wro
  for(let i=0;i<35;i++) {try {chat.request(event(sk),'rooms',now);}catch {}}
  expect(()=>chat.request(event(sk),'rooms',now)).toThrow('rate');await expect(cryptoUI.encrypt('x'.repeat(2001),room.key,period,pubkey,nonce)).rejects.toThrow();
 });
-test('exact UTC +3 day expiry prunes keys/messages on access and startup, no recreation through retained completions',async()=>{
+test('exact UTC next-word expiry prunes keys/messages on access and startup, no recreation through retained completions',async()=>{
  const {service,chat}=fixture(),sk=generateSecretKey();finish(service,sk);const room=rooms(chat,sk)[0];const nonce=randomBytes(16).toString('hex');const payload=await cryptoUI.encrypt('hello',room.key,period,getPublicKey(sk),nonce);chat.request(event(sk,'send',{period,nonce,...payload}),'send',now);
- const expiry=(period+3)*PERIOD_MS;expect(rooms(chat,sk,expiry-1)).toHaveLength(1);expect(rooms(chat,sk,expiry)).toEqual([]);
+ const expiry=(period+1)*PERIOD_MS;expect(rooms(chat,sk,expiry-1)).toHaveLength(1);expect(rooms(chat,sk,expiry)).toEqual([]);
  expect(()=>chat.request(event(sk,'read',{period},expiry),'read',expiry)).toThrow('expired');expect(()=>chat.request(event(sk,'send',{period,...payload},expiry),'send',expiry)).toThrow('expired');
  expect(service.db.query('SELECT * FROM chat_rooms').all()).toEqual([]);expect(service.db.query('SELECT * FROM chat_messages').all()).toEqual([]);
  service.db.query('INSERT INTO chat_rooms VALUES (?1,?2)').run(period-4,'old');new DailyChat(service);expect(service.db.query('SELECT * FROM chat_rooms').all()).toEqual([]);
 });
 test('browser storage prunes expired keys at exact boundary and removes keys for another identity',()=>{
  const map=new Map<string,string>();const storage={get length(){return map.size},key:(i:number)=>[...map.keys()][i],getItem:(k:string)=>map.get(k),setItem:(k:string,v:string)=>map.set(k,v),removeItem:(k:string)=>map.delete(k)};
- const expiresAt=(period+3)*PERIOD_MS;map.set('word5-chat:a',JSON.stringify([{period,expiresAt,key:'shared'}]));map.set('word5-chat:b','[]');cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has('word5-chat:b')).toBe(false);expect(JSON.parse(map.get('word5-chat:a')!)).toHaveLength(1);cryptoUI.prune(storage,'a',expiresAt);expect(JSON.parse(map.get('word5-chat:a')!)).toEqual([]);
+ const expiresAt=(period+1)*PERIOD_MS;map.set('word5-chat:a',JSON.stringify([{period,expiresAt,key:'shared'}]));map.set('word5-chat:b','[]');cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has('word5-chat:b')).toBe(false);expect(JSON.parse(map.get('word5-chat:a')!)).toHaveLength(1);cryptoUI.prune(storage,'a',expiresAt);expect(JSON.parse(map.get('word5-chat:a')!)).toEqual([]);
 });
 test('room history is bounded to the latest 200 ciphertext messages',()=>{
  const {service,chat}=fixture(),sk=generateSecretKey();finish(service,sk);

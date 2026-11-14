@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { getEventHash, validateEvent, verifyEvent, type Event } from 'nostr-tools';
-import { getCurrentPeriodId, getDateForPeriod, PERIOD_MS, type Word5Service } from './word5';
+import { getCurrentPeriodId, getDateForPeriod, getWordForPeriod, PERIOD_MS, type Word5Service } from './word5';
 
 export const CHAT_SCHEMA = 'word5.chat.v1';
 export class DailyChat {
@@ -14,8 +14,8 @@ export class DailyChat {
   prune(now = Date.now()) {
     const db = this.service.db;
     db.transaction(() => {
-      db.query('DELETE FROM chat_messages WHERE (period+3)*?1 <= ?2').run(PERIOD_MS, now);
-      db.query('DELETE FROM chat_rooms WHERE (period+3)*?1 <= ?2').run(PERIOD_MS, now);
+      db.query('DELETE FROM chat_messages WHERE period<>?1').run(getCurrentPeriodId(now));
+      db.query('DELETE FROM chat_rooms WHERE period<>?1').run(getCurrentPeriodId(now));
       db.query('DELETE FROM chat_requests WHERE received <= ?1').run(now - 120_000);
     })();
   }
@@ -40,15 +40,15 @@ export class DailyChat {
     db.query('INSERT INTO chat_requests VALUES (?1,?2,?3)').run(event.id, event.pubkey, now);
     const current = getCurrentPeriodId(now);
     const eligible = (period: number) => {
-      if (!Number.isSafeInteger(period) || period > current || now >= (period+3)*PERIOD_MS) throw new Error('Room expired or unavailable');
+      if (!Number.isSafeInteger(period) || period !== current) throw new Error('Room expired or unavailable');
       if (!db.query('SELECT 1 FROM game_submissions WHERE pubkey=?1 AND period_id=?2 AND verified_completion=1').get(event.pubkey, period)) throw new Error('Finish this puzzle to unlock chat');
     };
     if (action === 'rooms') {
-      const rows = db.query('SELECT period_id AS period FROM game_submissions WHERE pubkey=?1 AND verified_completion=1 AND period_id<=?2 AND (period_id+3)*?3>?4 ORDER BY period_id DESC').all(event.pubkey, current, PERIOD_MS, now) as {period:number}[];
+      const rows = db.query('SELECT period_id AS period FROM game_submissions WHERE pubkey=?1 AND verified_completion=1 AND period_id=?2').all(event.pubkey, current) as {period:number}[];
       const rooms = db.transaction(() => rows.map(({period}) => {
         db.query('INSERT OR IGNORE INTO chat_rooms VALUES (?1,?2)').run(period, randomBytes(32).toString('base64'));
         const room = db.query('SELECT key FROM chat_rooms WHERE period=?1').get(period) as {key:string};
-        return {period, date:getDateForPeriod(period), expiresAt:(period+3)*PERIOD_MS, key:room.key};
+        return {period, date:getDateForPeriod(period), word:getWordForPeriod(this.service.answers,period), expiresAt:(period+1)*PERIOD_MS, key:room.key};
       }))();
       return {ok:true, rooms, now};
     }

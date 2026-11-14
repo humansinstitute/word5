@@ -43,6 +43,8 @@ try {
   await page.locator('#chatNav').waitFor({state:'visible',timeout:5000}).catch(async e=>{ console.log('Debug:',await page.locator('#scoreStatus').textContent(),errors);throw e; });
   await page.locator('#discussGame').click();await page.waitForURL('**/chat.html');
   await page.waitForFunction(()=>!(document.getElementById('chatSend') as HTMLButtonElement).disabled);
+  if(await page.locator('select#chatRoom').count()) throw new Error('Unexpected room selector');
+  if(await page.locator('#chatRoom').textContent()!==`${getDateForPeriod(period)} · ${answer}`) throw new Error('Missing date and word room title');
   const text=`${loss?'loss':'win'} <img src=x onerror=alert(1)>`;
   if(loss) await page.screenshot({path:join(root,'tmp/docs/handoffs','chat-empty.png')});
   await page.locator('#chatText').fill(text);await page.locator('#chatSend').click();
@@ -58,7 +60,6 @@ try {
    const otherText='That last guess was a close one! How did everyone else get on?';
    const payload=await page.evaluate(async ({key,period,otherPublic,otherText})=> (window as any).Word5ChatCrypto.encrypt(otherText,key,period,otherPublic,'0123456789abcdef0123456789abcdef'),{key:room.key,period,otherPublic,otherText});
    chat.request(auth('send',{period,nonce:'0123456789abcdef0123456789abcdef',...payload}),'send');
-   await page.waitForTimeout(10500);
    await page.locator('.chat-message:not(.own)').getByText(otherText,{exact:true}).waitFor();
    if(await page.locator('.chat-message:not(.own) .message-name').last().textContent()==='You') throw new Error('Other sender mislabeled');
    await page.screenshot({path:join(root,'tmp/docs/handoffs','chat-desktop.png')});
@@ -75,8 +76,21 @@ try {
    await page.evaluate(pk=>{(window as any).NostrSession.updatePlayer({auth_mode:'nip07',linked_pubkey:pk});},pk);
    await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
    console.log('Delayed room-key response after identity change is discarded');
+   // Amber is recognized, but background reads never open an external signer.
+   await page.evaluate(pk=>{
+    (window as any).amberChatSigns=0;
+    (window as any).AmberSigner.signEvent=async event=>{ (window as any).amberChatSigns++; return (window as any).testSign(event); };
+    (window as any).NostrSession.updatePlayer({auth_mode:'amber',linked_pubkey:pk});
+   },pk);
+   await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
+   const before=await page.evaluate(()=>(window as any).amberChatSigns);
+   await page.waitForTimeout(10500);
+   if(await page.evaluate(()=>(window as any).amberChatSigns)!==before) throw new Error('Amber received unsolicited polling request');
+   await page.locator('#chatRefresh').click();
+   await page.waitForFunction(before=>(window as any).amberChatSigns>before,before);
+   console.log('Amber room access and explicit refresh passed; no background signer prompts');
   }
-  await page.evaluate(()=>{ const originalNow=Date.now; Date.now=()=> (Math.floor(originalNow()/86400000)+3)*86400000; });
+  await page.evaluate(()=>{ const originalNow=Date.now; Date.now=()=> (Math.floor(originalNow()/86400000)+1)*86400000; });
   await page.waitForFunction(()=>document.getElementById('chatMessages')?.children.length===0 && Object.keys(sessionStorage).filter(key=>key.startsWith('word5-chat:')).every(key=>JSON.parse(sessionStorage.getItem(key)!).length===0));
   await page.evaluate(()=>{(window as any).NostrSession.updatePlayer({auth_mode:'session',imported_at:null,linked_pubkey:null,privkey:null});});
   await page.waitForFunction(()=>document.getElementById('chatMessages')?.children.length===0 && !Object.keys(sessionStorage).some(key=>key.startsWith('word5-chat:')));

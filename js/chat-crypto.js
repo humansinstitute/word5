@@ -24,7 +24,7 @@
         try {
           const value = JSON.parse(storage.getItem(name));
           if (!identity || name !== `${prefix}${identity}` || !Array.isArray(value)) { storage.removeItem(name); continue; }
-          storage.setItem(name, JSON.stringify(value.filter(room => Number.isSafeInteger(room.period) && room.expiresAt === (room.period+3)*86400000 && room.expiresAt>now)));
+          storage.setItem(name, JSON.stringify(value.filter(room => Number.isSafeInteger(room.period) && room.expiresAt === (room.period+1)*86400000 && room.expiresAt>now)));
         } catch { storage.removeItem(name); }
       }
     }

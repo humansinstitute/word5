@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json bun.lock* ./
 RUN bun install --production --frozen-lockfile || bun install --production
 
-COPY index.html social.html manifest.webmanifest ./
+COPY index.html social.html chat.html manifest.webmanifest ./
 COPY js/ ./js/
 COPY assets/ ./assets/
 COPY src/ ./src/
