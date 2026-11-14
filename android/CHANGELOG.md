@@ -1,3 +1,7 @@
+# 1.0.5
+
+Daily chat is now native: one date-and-word room for today’s finishers, encrypted messages, profile photos/names and result badges, cached incremental refresh, offline retry and explicit Amber approval/cancellation. Private native completions unlock only after confirming score validation with Word5; no public Nostr post is created. Already verified restored/web completions can join without resubmitting guesses. Rooms, keys, drafts and cached messages clear at the next word or account change. Existing account saves, statistics, hard-mode preferences and encrypted backup remain unchanged.
+
 # 1.0.3
 
 Completed games now keep a View result / Post to Nostr action below the board and in the menu, including after closing dialogs or returning from Social. Posting still requires preview and confirmation. Existing pending score links reuse the confirmed post; successful publication is retained per account and puzzle. The release is named Word5 without Test. Existing account saves and encrypted backup are preserved.

@@ -104,7 +104,7 @@ class MainActivity: ComponentActivity() {
         val observer = LifecycleEventObserver { _, event -> if(event == Lifecycle.Event.ON_RESUME) m.onResume() }
         lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(Unit) { while(true) { delay(1000); now = System.currentTimeMillis(); if(now / 1000 % 60 == 0L && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) m.onResume() } }
+    LaunchedEffect(Unit) { while(true) { delay(1000); now = System.currentTimeMillis(); m.chatTick(); if(now / 1000 % 60 == 0L && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) m.onResume() } }
     LaunchedEffect(m.noticeSerial) { if(m.notice.isNotEmpty()) { toast = m.notice; delay(1500); toast = "" } }
     val game = m.state.games[now / 86400000] ?: Game(now / 86400000, hard = m.state.hard)
     val target = m.rules.answer(game.period)
@@ -138,6 +138,7 @@ class MainActivity: ComponentActivity() {
                         Copy("⚡",16,Orange,modifier=Modifier.clickable { menu=false;modal="donate" }.padding(horizontal=8.dp,vertical=6.dp))
                         Copy("Play",if(mobile)12 else 14,if(page=="Play") Purple else Muted,true,Modifier.clickable { page="Play";menu=false }.padding(horizontal=if(mobile)5.dp else 12.dp,vertical=if(mobile)6.dp else 8.dp))
                         Copy("Social",if(mobile)12 else 14,if(page=="Social") Purple else Muted,true,Modifier.clickable { page="Social";menu=false }.padding(horizontal=if(mobile)5.dp else 12.dp,vertical=if(mobile)6.dp else 8.dp))
+                        if(page=="Chat")Copy("Chat",12,Purple,true,Modifier.padding(horizontal=5.dp))
                         if(page=="Play")Box(Modifier.size(28.dp).border(2.dp,Border,RoundedCornerShape(50)).clickable { menu=false;modal="help" },contentAlignment=Alignment.Center) { Copy("?",14,Muted,true) }
                     }
                 }
@@ -173,7 +174,7 @@ class MainActivity: ComponentActivity() {
                             }
                         }
                     }
-                } else SocialScreen(m, { modal=it }, share)
+                } else if(page=="Chat") ChatScreen(m) { page="Play" } else SocialScreen(m, { modal=it }, share)
             }
             if(menu) {
                 Box(Modifier.fillMaxSize().clickable { menu=false })
@@ -185,6 +186,7 @@ class MainActivity: ComponentActivity() {
                     WebButton("My Profile",Modifier.fillMaxWidth().padding(bottom=6.dp)) { menu=false;modal="profile" }
                     WebButton("New Player",Modifier.fillMaxWidth().padding(bottom=6.dp)) { menu=false;modal="new" }
                     if(m.completed()) WebButton("Today’s result / Post to Nostr",Modifier.fillMaxWidth().padding(bottom=6.dp),color=Purple) { menu=false;m.reopenResult() }
+                    WebButton("Daily chat",Modifier.fillMaxWidth().padding(top=8.dp,bottom=6.dp),color=Purple) { menu=false;m.resultOpen=false;page="Chat" }
                     WebButton("Check my streak",Modifier.fillMaxWidth().padding(top=8.dp,bottom=6.dp),color=Purple) { menu=false;modal="stats";m.sync() }
                     WebButton("Donate ⚡",Modifier.fillMaxWidth().padding(top=4.dp,bottom=6.dp),color=Orange) { menu=false;modal="donate" }
                     Copy("Version ${BuildConfig.VERSION_NAME}",11,Muted,modifier=Modifier.fillMaxWidth().padding(top=8.dp),align=TextAlign.Center)
@@ -200,7 +202,7 @@ class MainActivity: ComponentActivity() {
                 StatsRow(m); RuleLine()
                 Copy("NEXT WORD",12,Muted,modifier=Modifier.padding(top=16.dp,bottom=4.dp).height(14.dp))
                 Text(countdown,color=Color.White,fontSize=28.sp,fontWeight=FontWeight.Bold,lineHeight=34.sp,style=TextStyle(fontFeatureSettings="tnum"),modifier=Modifier.height(34.dp))
-                WebButton("Discuss today’s game",primary=true,horizontalPadding=24) { modal="chat" }
+                WebButton("Discuss today’s game",primary=true,horizontalPadding=24) { m.resultOpen=false;modal="";page="Chat" }
                 if(m.donationDue) { Spacer(Modifier.height(16.dp));RuleLine();Copy("Word5 is a free game, but hosted on real servers. If you find it valuable, please consider donating",14,Muted,modifier=Modifier.padding(vertical=12.dp),align=TextAlign.Center);WebButton("Donate",Modifier.fillMaxWidth(),color=Orange) { modal="donate" } }
                 Row(Modifier.fillMaxWidth().padding(top=16.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                     WebButton("Share",Modifier.weight(1f),primary=true,onClick=share)
@@ -243,7 +245,7 @@ class MainActivity: ComponentActivity() {
                 if(m.state.baseline!=null)Copy("Earlier totals are preserved; some older games lack distribution details.",11,Muted,modifier=Modifier.padding(top=12.dp))
             }
             "new" -> WebModal(close) { ModalHeading("New Player",close);Copy("Your current account's save stays on this device and in its encrypted backup. Choose another account in Amber, or return to offline play.",13,Muted);WebButton("Choose account in Amber",Modifier.fillMaxWidth().padding(top=16.dp),primary=true) { close();m.login() };if(m.owner.isNotEmpty())WebButton("Sign out",Modifier.fillMaxWidth().padding(top=8.dp)) { close();m.signOut() } }
-            "chat" -> WebModal(close) { ModalHeading("Daily chat",close);Copy("Daily group chat is not supported by the web app’s Amber sign-in. Your native Amber account can play, restore encrypted stats and explicitly post results. Chat remains unavailable for this sign-in method.",13,Muted) }
+
             "post" -> WebModal(close,result=true) { Copy("Post to Nostr?",20,bold=true);Text(m.shareText(),color=Color.White,fontFamily=FontFamily.Monospace,fontSize=12.sp,lineHeight=16.2.sp,modifier=Modifier.fillMaxWidth().padding(top=12.dp).heightIn(max=220.dp).background(Background).border(1.dp,Border,RoundedCornerShape(6.dp)).verticalScroll(rememberScrollState()).padding(13.dp));Copy("Your active Amber account will be used after you confirm. This publishes your result and summary statistics publicly and records today’s score with Word5. Guesses go only to Word5 for score validation, never to public relays.",12,Muted,modifier=Modifier.padding(top=12.dp));Row(Modifier.padding(top=16.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) { WebButton("Cancel",Modifier.weight(1f),color=Border,primary=true) { modal="" };WebButton("Post",Modifier.weight(1f),primary=true) { modal="";m.postResult() } } }
             "score" -> WebModal(close) { ModalHeading("Score / restore history",close);Copy("Restore is private. Recording a score sends today's guesses and result to Word5's public scoreboard. It happens only if you choose to record it.",13,Muted);WebButton("Restore encrypted history",Modifier.fillMaxWidth().padding(top=12.dp)) { m.sync(true) };if(m.completed())WebButton("Record today's score publicly",Modifier.fillMaxWidth().padding(top=8.dp),primary=true) { modal="";m.recordScore() } }
             "donate" -> DonateModal(close)

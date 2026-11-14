@@ -47,6 +47,17 @@ class GameModel(app: Application): AndroidViewModel(app) {
     private var operation = 0L
     private var activePeriod = Rules.period()
     private val backup = Backup(amber, rules)
+    var chatRoom by mutableStateOf<ChatRoom?>(null); private set
+    var chatMessages by mutableStateOf<List<ChatMessage>>(emptyList()); private set
+    var chatMembers by mutableStateOf<Map<String,ChatMember>>(emptyMap()); private set
+    var chatDraft by mutableStateOf(""); private set
+    var chatStatus by mutableStateOf("Finish today’s puzzle to unlock its chat."); private set
+    var chatBusy by mutableStateOf(false); private set
+    private var chatVisible=false
+    private var chatEpoch=0
+    private var chatJob: Job?=null
+    private var chatMetadataJob: Job?=null
+    private val chatClient=DailyChatClient(amber)
     init { load(); if(owner.isNotEmpty()) message = "Backup pending; reconnecting automatically."; viewModelScope.launch { delay(500); if(completed()) openResult() } }
     private fun file(key: String = owner) = File(getApplication<Application>().filesDir, "state-${key.ifEmpty { "guest" }}.json")
     private fun load() {
@@ -60,14 +71,14 @@ class GameModel(app: Application): AndroidViewModel(app) {
         temp.writeText(Codec.encode(state, owner)); check(temp.renameTo(target)) { "Local save failed" }
     }
     fun login() {
-        if(syncing || publicBusy) return
+        if(syncing || publicBusy || chatBusy) return
         val token = ++operation
         syncJob = viewModelScope.launch {
             syncing = true; amber.interactive = true
             try {
                 val key = amber.login()
                 ensureActive(); check(operation == token)
-                generation++; owner = key; prefs.edit().putString("owner", key).apply(); load(); refreshProfile()
+                clearChat("Account changed. Finish today’s puzzle to join chat."); generation++; owner = key; prefs.edit().putString("owner", key).apply(); load(); refreshProfile()
                 message = if(syncEnabled) "Connected with Amber. Restoring encrypted backup…" else "Encrypted sync paused. Tap status to resume."
             } catch(e: CancellationException) { throw e }
             catch(_: Exception) { message = "Amber sign in failed or was cancelled. Install/unlock Amber and retry.";notify("Amber sign in cancelled or unavailable") }
@@ -76,11 +87,12 @@ class GameModel(app: Application): AndroidViewModel(app) {
         }
     }
     fun signOut() {
+        clearChat("Sign in with Amber to join daily chat.")
         publicJob?.cancel(); publicBusy = false; publicStatus = ""
         generation++; operation++; syncJob?.cancel(); amber.cancel(); syncing = false
         owner = ""; prefs.edit().remove("owner").apply(); load(); message = "Signed out. Account save retained on this device."
     }
-    fun cancel() { val wasPublic=publicBusy;operation++; syncJob?.cancel(); publicJob?.cancel(); amber.cancel(); syncing = false; publicBusy = false; amber.interactive = false; message = "Sync cancelled. Local game kept; tap Retry.";if(wasPublic)publicStatus="Action cancelled. Local save kept." }
+    fun cancel() { if(chatBusy)cancelChat();val wasPublic=publicBusy;operation++; syncJob?.cancel(); publicJob?.cancel(); amber.cancel(); syncing = false; publicBusy = false; amber.interactive = false; message = "Sync cancelled. Local game kept; tap Retry.";if(wasPublic)publicStatus="Action cancelled. Local save kept." }
     fun toggleHard() {
         if(state.current().guesses.isNotEmpty() || completed()) { message = "Hard mode can change before your first guess."; return }
         val hard = !state.hard
@@ -115,7 +127,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
     }
     /** Every attempt fetches first. No fetched revision survives a failed/unknown read. */
     fun sync(interactive: Boolean = false) {
-        if(owner.isEmpty() || syncing || publicBusy) return
+        if(owner.isEmpty() || syncing || publicBusy || chatBusy) return
         if(!syncEnabled) { if(!interactive)return;syncEnabled=true;prefs.edit().putBoolean("auto-sync-$owner",true).apply() }
         syncJob = viewModelScope.launch {
             val account = owner; val epoch = generation; val token = ++operation
@@ -148,9 +160,9 @@ class GameModel(app: Application): AndroidViewModel(app) {
         }
     }
     private fun rollover() {
-        if(activePeriod != Rules.period()) { activePeriod = Rules.period(); draft = ""; revealing = false; resultOpen = false; state = state.copy(); message = "A new daily puzzle is ready." }
+        if(activePeriod != Rules.period()) { clearChat("A new word is here. Finish today’s puzzle to unlock its chat."); activePeriod = Rules.period(); draft = ""; revealing = false; resultOpen = false; state = state.copy(); message = "A new daily puzzle is ready." }
     }
-    fun onResume() { rollover(); sync(); refreshProfile() }
+    fun onResume() { rollover(); chatTick(); if(!chatVisible)sync(); refreshProfile() }
     private fun refreshProfile() {
         if(owner.isEmpty() || profileAccount == owner) return
         val account=owner; profileAccount=account; profileJob?.cancel()
@@ -158,7 +170,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
     }
     fun publicAction(action: suspend (String) -> String) {
         if(owner.isEmpty()) { notify("Sign in with Amber first"); return }
-        if(syncing || publicBusy) { notify("Wait for the current action to finish"); return }
+        if(syncing || publicBusy || chatBusy) { notify("Wait for the current action to finish"); return }
         val account = owner
         publicBusy = true
         val publicToken = ++operation
@@ -218,6 +230,89 @@ class GameModel(app: Application): AndroidViewModel(app) {
         }
         val event=amber.sign(completionDraft(g,rules,account))
         check(owner==account); PublicNostr.api("api/completion",event)
+    }
+    fun editChat(text:String) { chatTick();if(chatRoom!=null)chatDraft=text.take(2000) }
+    fun setChatVisible(visible:Boolean) { chatVisible=visible;chatTick();if(!visible&&!chatBusy)sync() }
+    fun chatTick() { if(chatRoom?.active(owner,System.currentTimeMillis())==false)clearChat("A new word is here. Finish today’s puzzle to unlock its chat.") }
+    private fun clearChat(status:String) {
+        chatEpoch++;chatJob?.cancel();chatMetadataJob?.cancel()
+        if(chatBusy) { amber.cancel();amber.interactive=false }
+        chatBusy=false;chatClient.reset();chatRoom?.discard();chatRoom=null;chatMessages=emptyList();chatMembers=emptyMap();chatDraft="";chatStatus=status
+    }
+    fun cancelChat() { chatEpoch++;chatJob?.cancel();amber.cancel();amber.interactive=false;chatBusy=false;chatStatus="Chat action cancelled. Your draft is kept; retry when ready." }
+    private fun chatAction(interactive:Boolean, action:suspend (String,Int,Long)->Unit) {
+        chatTick()
+        if(owner.isEmpty()) { chatStatus="Sign in with Amber to join daily chat.";return }
+        if(chatBusy || syncing || publicBusy) { if(interactive)chatStatus="Wait for the current Amber action to finish, then retry chat.";return }
+        val account=owner;val epoch=chatEpoch;val period=Rules.period()
+        chatBusy=true
+        chatJob=viewModelScope.launch {
+            amber.interactive=interactive
+            try { action(account,epoch,period) }
+            catch(e:CancellationException) { throw e }
+            catch(e:Exception) { if(owner==account && chatEpoch==epoch)chatStatus=when {
+                e.message?.contains("approval needed")==true -> "Chat needs Amber permission. Tap Refresh and approve kind30078; remembered permission enables automatic updates."
+                e is java.io.IOException -> "Chat is offline or the server is unavailable. Cached messages and your draft are kept; tap Refresh to retry."
+                e is org.json.JSONException -> "Chat response could not be read. Cached messages and your draft are kept; retry."
+                else -> e.message?.take(240) ?: "Chat unavailable. Your draft is kept; retry when online."
+            } }
+            finally { if(owner==account && chatEpoch==epoch) { chatBusy=false;amber.interactive=false;if(!chatVisible)sync() } }
+        }
+    }
+    private fun currentChat(account:String,epoch:Int,period:Long) { check(owner==account && chatEpoch==epoch && Rules.period()==period) { "Account or daily word changed" } }
+    /** Opening/refreshing checks membership only: it never sends guesses or posts. */
+    fun openChat() = chatAction(true) { account,epoch,period ->
+        chatStatus="Checking today’s chat…"
+        val room=chatClient.open(account);currentChat(account,epoch,period)
+        if(room==null) { chatStatus=if(completed())"Validate your completed result to unlock today’s chat, or check an existing server completion." else "Finish today’s puzzle to unlock chat.";return@chatAction }
+        chatRoom?.takeIf{it!==room}?.discard();chatRoom=room
+        chatStatus="";readChat(account,epoch,period,room)
+    }
+    /** Explicit confirmation is required in ChatScreen before this method runs. */
+    fun unlockChat() = chatAction(true) { account,epoch,period ->
+        check(completed()) { "Finish today’s puzzle first" }
+        chatStatus="Checking your completed result…"
+        var room=chatClient.open(account);currentChat(account,epoch,period)
+        if(room==null) {
+            chatStatus="Validating your result with Word5…"
+            chatClient.validateCompletion(account,state.current(),rules);currentChat(account,epoch,period)
+            room=chatClient.open(account);currentChat(account,epoch,period)
+        }
+        check(room!=null) { "Result validation did not unlock chat. Retry checking the room." }
+        chatRoom?.discard();chatRoom=room;chatStatus="";readChat(account,epoch,period,room)
+    }
+    fun refreshChat(interactive:Boolean=true) {
+        if(chatRoom==null) { if(interactive)openChat();return }
+        chatAction(interactive) { account,epoch,period -> readChat(account,epoch,period,chatRoom ?: return@chatAction) }
+    }
+    fun sendChat() = chatAction(true) { account,epoch,period ->
+        val room=chatRoom ?: error("Finish today’s puzzle to unlock chat")
+        val text=chatDraft;check(text.isNotBlank()) { "Write a message first" }
+        chatStatus="Sending encrypted message…"
+        chatClient.send(account,room,text);currentChat(account,epoch,period)
+        if(chatDraft==text)chatDraft=""
+        chatStatus="";readChat(account,epoch,period,room)
+    }
+    private suspend fun readChat(account:String,epoch:Int,period:Long,room:ChatRoom) {
+        val rows=chatClient.read(account,room);currentChat(account,epoch,period)
+        if(chatRoom!==room)return
+        chatMessages=rows;chatStatus="";loadChatMembers(account,epoch,room,rows)
+    }
+    private fun loadChatMembers(account:String,epoch:Int,room:ChatRoom,rows:List<ChatMessage>) {
+        val missing=rows.map{it.pubkey}.distinct().filter{it !in chatMembers}
+        if(missing.isEmpty() || chatMetadataJob?.isActive==true)return
+        chatMetadataJob=viewModelScope.launch {
+            val permits=kotlinx.coroutines.sync.Semaphore(3)
+            missing.forEach { pubkey -> launch {
+                permits.acquire()
+                try {
+                    val profile=async { try { withTimeout(6000){PublicNostr.profile(pubkey)} } catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;null} catch(_:Exception){null} }
+                    val history=async { try { withTimeout(6000){PublicNostr.get("api/player-history?pubkey=$pubkey")} } catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;null} catch(_:Exception){null} }
+                    val member=chatMember(profile.await(),history.await(),pubkey,room.period)
+                    if(owner==account && chatEpoch==epoch && chatRoom===room && room.active(owner,System.currentTimeMillis()))chatMembers=chatMembers+(pubkey to member)
+                } finally { permits.release() }
+            } }
+        }
     }
     fun shareText(): String = resultShareText(state,rules)
 }

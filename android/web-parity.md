@@ -24,7 +24,7 @@ The existing `index.html`, `social.html`, `chat.html` and their JavaScript are t
 | Web action | Native equivalent and privacy |
 | --- | --- |
 | Result heading, revealed word and four summary columns | Same result messages, purple word, played/win-percent/streak/max-streak and next-word countdown. |
-| Discuss today’s game | Honest explanation of the existing web Amber chat limitation. No unsupported room access or substitute signer is fabricated. |
+| Discuss today’s game | Native current-day date+word group, verified-completion gate, shared-key encrypted send/read, cached delta refresh, profile/photo/result headers and retryable offline/cancel states. Private native guesses are submitted only after separate validation disclosure/confirmation; no public Nostr post is created. Restored outcomes without guesses can use only an existing verified completion. |
 | Completion donation | Same periodic donation prompt; it leads to the native donation card. |
 | Share | Explicit Android share sheet with the same `WORD5`, purple/orange/black emoji grid, hard-mode marker and URL. Guesses are absent. |
 | Post to Nostr | Preview and informed confirmation, Amber kind 1 signature, existing web tags and relay acknowledgements. Only the public emoji result and summary statistics enter the relay event. |
@@ -60,3 +60,5 @@ Automatic encrypted backup never submits a public completion or publication even
 Phone comparisons use equal content viewports after measured system/camera-cutout/navigation insets. Web geometry, computed fonts/palette and actual renders precede implementation. Raw screenshots, controlled fixture definitions, APK bytes/hashes and device evidence stay in ignored handoffs. Visual fixtures call the production native composables and are labelled; no fixture signing or public-write transport exists. Live read-only Social captures complement fixture views, and the release APK receives its own game, menu, result, profile and real Amber checks.
 
 The inner encrypted save is version 2 with strict version-1 migration. Backend correction anchors are private signed-summary data; activating any new backend contract is a separate deployment decision. Source tests and local review do not claim production activation, store admission or approval to publish the APK.
+
+Daily chat keys, drafts, messages and cursors are in-memory and account/day/key-scoped. UTC rollover and account switching clear them; no prior rooms are listed. The same production `word5.chat.v1` AES-GCM and signed-request contract is used, with backwards-compatible optional receipt cursors and legacy read fallback. No chat plaintext enters native backup, local-save schema or public relay events.

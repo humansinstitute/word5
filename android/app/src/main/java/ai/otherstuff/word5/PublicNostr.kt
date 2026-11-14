@@ -9,6 +9,8 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+class ApiRejection(message:String,val status:Int):IllegalStateException(message) { val definitive get()=status in 400..499 || status in 200..299 }
+
 /** Public operations are separate from the encrypted-save transport. No implicit publication. */
 object PublicNostr {
     val relays=listOf("wss://relay.damus.io","wss://nos.lol","wss://relay.snort.social")
@@ -20,7 +22,7 @@ object PublicNostr {
     }
     suspend fun api(path: String, event: Event): JSONObject = withContext(Dispatchers.IO) {
         client.newCall(Request.Builder().url(BuildConfig.API_BASE+path).post(JSONObject().put("event",event.json()).toString().toRequestBody("application/json".toMediaType())).build()).execute().use { r ->
-            val data=JSONObject(String(r.body.byteStream().use { it.readBounded(4000000) },Charsets.UTF_8)); check(r.isSuccessful && data.optBoolean("ok")) { data.optString("error","Word5 request failed") };data
+            val data=JSONObject(String(r.body.byteStream().use { it.readBounded(4000000) },Charsets.UTF_8)); if(!r.isSuccessful || !data.optBoolean("ok"))throw ApiRejection(data.optString("error","Word5 request failed"),r.code);data
         }
     }
     private suspend fun queryRelay(url: String, filter: JSONObject): List<Event> {
