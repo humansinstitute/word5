@@ -8,6 +8,7 @@
     profilePubkey: "",
   };
   const profileCache = new Map();
+  const profileInflight = new Map();
   const BLOSSOM_UPLOAD_SERVER = "https://blossom.primal.net";
   const WORD5_STORAGE_KEY = "words-game";
   const WORD5_ROTATION_HOURS = 24;
@@ -927,40 +928,38 @@
   }
 
   async function loadProfile(pubkey, options = {}) {
-    if (!pubkey) return null;
-    if (!options.force && profileCache.has(pubkey)) {
-      return profileCache.get(pubkey);
-    }
-
+    if (!/^[0-9a-f]{64}$/.test(pubkey || '')) return null;
+    if (!options.force && profileCache.has(pubkey)) return profileCache.get(pubkey);
+    if (!options.force && profileInflight.has(pubkey)) return profileInflight.get(pubkey);
+    const operation=(async()=>{
+      let pool, relays;
+      try {
+        const {SimplePool,verifyEvent,getEventHash}=await import("https://esm.sh/nostr-tools@2?bundle");
+        pool=new SimplePool(); relays=getRelayList();
+        const events=await pool.querySync(relays,{kinds:[0],authors:[pubkey],limit:5},{maxWait:3000});
+        const event=events?.filter(event=>{
+          try { return event.kind===0 && event.pubkey===pubkey && event.content.length<=16000 && verifyEvent(event) && getEventHash(event)===event.id; }
+          catch { return false; }
+        }).sort((a,b)=>b.created_at-a.created_at)[0];
+        if (!event) return null;
+        const data=JSON.parse(event.content);
+        if (!data || typeof data!=='object' || Array.isArray(data)) return null;
+        const text=value=>typeof value==='string' ? value : '';
+        let picture='';
+        try {
+          const url=new URL(text(data.picture));
+          if (['https:','http:'].includes(url.protocol) && !url.username && !url.password) picture=url.href;
+        } catch {}
+        return {name:(text(data.display_name).trim() || text(data.name).trim()).slice(0,64),about:text(data.about),picture,data};
+      } catch { return null; }
+      finally { if (pool) { try { pool.close(relays); } catch {} } }
+    })();
+    profileInflight.set(pubkey,operation);
     try {
-      const { SimplePool } = await import("https://esm.sh/nostr-tools@2?bundle");
-      const pool = new SimplePool();
-      const events = await pool.querySync(getRelayList(), {
-        kinds: [0],
-        authors: [pubkey],
-        limit: 1,
-      });
-      try { pool.close(getRelayList()); } catch (_) {}
-
-      const event = events?.sort((a, b) => b.created_at - a.created_at)?.[0];
-      if (!event) {
-        profileCache.set(pubkey, null);
-        return null;
-      }
-
-      const data = JSON.parse(event.content);
-      const profile = {
-        name: data.display_name || data.name || "",
-        about: data.about || "",
-        picture: data.picture || "",
-        data,
-      };
-      profileCache.set(pubkey, profile);
+      const profile=await operation;
+      if (profileInflight.get(pubkey)===operation) profileCache.set(pubkey,profile);
       return profile;
-    } catch (_) {
-      profileCache.set(pubkey, null);
-      return null;
-    }
+    } finally { if (profileInflight.get(pubkey)===operation) profileInflight.delete(pubkey); }
   }
 
   function renderTimerIdentityLabel(text) {
@@ -1229,6 +1228,7 @@
         picture: nextData.picture || "",
         data: nextData,
       };
+      profileInflight.delete(pubkey);
       profileCache.set(pubkey, nextProfile);
       renderTimerIdentityLabel(nextProfile.name || "");
       status.textContent = "Profile updated.";
@@ -1734,6 +1734,7 @@
   }
 
   window.NostrUI = {
+    loadProfile,
     renderKeys,
     renderAvatar,
     showKeysModal,

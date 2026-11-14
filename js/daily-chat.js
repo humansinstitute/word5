@@ -155,6 +155,71 @@
       if ($('chatMarker')) $('chatMarker').textContent=`${room.date} · shared with finishers`;
     }
   }
+  // Metadata is optional: display messages immediately, then enrich their fixed
+  // header/avatar slots without replacing nodes or moving the reader's scroll.
+  const senderCache=new Map(), senderQueue=[];
+  let senderLookups=0;
+  function drainSenders() {
+    while (senderLookups<3 && senderQueue.length) {
+      const job=senderQueue.shift(); senderLookups++;
+      void job().finally(()=>{ senderLookups--; drainSenders(); });
+    }
+  }
+  function senderDetails(pubkey, period) {
+    const key=`${period}:${pubkey}`;
+    if (!senderCache.has(key)) {
+      if (senderQueue.length>=200) return Promise.resolve({});
+      if (senderCache.size>=256) senderCache.delete(senderCache.keys().next().value);
+      senderCache.set(key,new Promise(resolve=>{
+        senderQueue.push(async()=>{
+          if (period!==Math.floor(Date.now()/86400000)) { resolve({}); return; }
+          let timeout;
+          const profile=Promise.race([
+            Promise.resolve().then(()=>window.NostrUI?.loadProfile(pubkey)),
+            new Promise(resolve=>{ timeout=setTimeout(()=>resolve(null),4000); })
+          ]).catch(()=>null).finally(()=>clearTimeout(timeout));
+          const result=(async()=>{
+            try {
+              const response=await fetch(`api/player-history?pubkey=${encodeURIComponent(pubkey)}`,{cache:'no-store',signal:AbortSignal.timeout(5000)});
+              const report=await response.json();
+              if (response.ok && report.ok && report.pubkey===pubkey && report.periodId===period && report.completed===true && /^[1-6X]$/.test(report.currentResult)) return report.currentResult;
+            } catch {}
+            return null;
+          })();
+          const details=await Promise.all([profile,result]);
+          resolve({profile:details[0],result:details[1]});
+        });
+        drainSenders();
+      }));
+    }
+    return senderCache.get(key);
+  }
+  function enrichSender(item, pubkey, room, run, viewer) {
+    void senderDetails(pubkey,room.period).then(({profile,result})=>{
+      if (run!==generation || identity!==viewer || selectedRoom()!==room || room.expiresAt<=Date.now() || !item.isConnected) return;
+      const sender=item.querySelector('.message-name'), avatar=item.querySelector('.message-avatar');
+      if (profile?.name) {
+        sender.textContent=profile.name;
+        item.querySelector('.message-own').hidden=pubkey!==viewer || profile.name==='You';
+        avatar.textContent=profile.name.trim().split(/\s+/).slice(0,2).map(word=>Array.from(word)[0]).join('').toUpperCase();
+      }
+      if (profile?.picture) {
+        // Revalidate even if a caller provides a cached/custom profile resolver.
+        try {
+          const url=new URL(profile.picture);
+          if (['https:','http:'].includes(url.protocol) && !url.username && !url.password) {
+            const image=document.createElement('img'); image.alt=''; image.width=30;image.height=30;image.loading='lazy';image.decoding='async';image.referrerPolicy='no-referrer';
+            image.addEventListener('error',()=>image.remove(),{once:true}); image.src=url.href;avatar.append(image);
+          }
+        } catch {}
+      }
+      if (result) {
+        const badge=item.querySelector('.message-result');badge.textContent=`${result}/6`;
+        badge.setAttribute('aria-label',result==='X' ? '6 guesses · not solved' : `${result} of 6 guesses`);
+        badge.title=badge.getAttribute('aria-label');
+      }
+    }).catch(()=>{});
+  }
   async function read(resumed = null) {
     const room = selectedRoom(), run = generation;
     if (!$('chatMessages') || !room || polling) return;
@@ -174,11 +239,14 @@
           const avatar=document.createElement('div'); avatar.className='message-avatar'; avatar.textContent=own ? 'ME' : event.pubkey.slice(0,2).toUpperCase(); avatar.setAttribute('aria-hidden','true');
           avatar.style.setProperty('--avatar-hue',String(parseInt(event.pubkey.slice(0,6),16)%360));
           const content=document.createElement('div'); content.className='message-content';
+          item.dataset.senderPubkey=event.pubkey;
           const meta=document.createElement('div'); meta.className='message-meta';
           const sender=document.createElement('span'); sender.className='message-name'; sender.textContent=own ? 'You' : `${event.pubkey.slice(0,6)}…${event.pubkey.slice(-4)}`; sender.title=event.pubkey;
           const time=document.createElement('time'); time.dateTime=new Date(event.created_at*1000).toISOString(); time.textContent=new Date(event.created_at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); time.title=new Date(event.created_at*1000).toLocaleString();
           const message=document.createElement('p'); message.className='message-bubble'; message.textContent=text;
-          meta.append(sender,time); content.append(meta,message); item.append(avatar,content); nodes.push(item);
+          const ownLabel=document.createElement('span');ownLabel.className='message-own';ownLabel.textContent=own ? 'You' : '';ownLabel.hidden=true;
+          const badge=document.createElement('span');badge.className='message-result';
+          meta.append(sender,ownLabel,badge,time); content.append(meta,message); item.append(avatar,content); nodes.push(item);
         } catch { /* Ignore malformed or unauthentic ciphertext. */ }
       }
       if (run===generation && selectedRoom()===room && room.expiresAt>Date.now()) {
@@ -187,6 +255,7 @@
         if(changed) {
           const follow=forceScroll || !history || history.scrollHeight-history.scrollTop-history.clientHeight<100;
           list.replaceChildren(...nodes); updateEmpty();
+          for (const item of nodes) enrichSender(item,item.dataset.senderPubkey,room,run,identity);
           if(follow && history) history.scrollTop=history.scrollHeight;
         }
         forceScroll=false;

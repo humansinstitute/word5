@@ -49,10 +49,14 @@
     #chatMessages { padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:18px; }
     .chat-message { display:flex;gap:10px;align-items:flex-end;max-width:86%;align-self:flex-start; }
     .chat-message.own { align-self:flex-end;flex-direction:row-reverse; }
-    .message-avatar { width:30px;height:30px;flex:none;border-radius:10px;display:grid;place-items:center;background:hsl(var(--avatar-hue) 36% 25%);color:hsl(var(--avatar-hue) 65% 82%);font-size:10px;font-weight:700; }
+    .message-avatar { position:relative;overflow:hidden;width:30px;height:30px;flex:none;border-radius:10px;display:grid;place-items:center;background:hsl(var(--avatar-hue) 36% 25%);color:hsl(var(--avatar-hue) 65% 82%);font-size:10px;font-weight:700; }
+    .message-avatar img { position:absolute;inset:0;width:100%;height:100%;object-fit:cover; }
+    .message-result { flex:none;min-width:25px;color:#dbc0f0;font-weight:700;white-space:nowrap; }
+    .message-own { flex:none;color:#b5a4c1; }
+    .message-meta time { flex:none;white-space:nowrap; }
     .message-content { min-width:0; }
     .message-meta { display:flex;align-items:baseline;gap:8px;margin:0 4px 6px;color:#a89caf;font-size:11px; }
-    .message-name { color:#ccc3d5;font-weight:600; }
+    .message-name { min-width:0;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ccc3d5;font-weight:600; }
     .own .message-meta { justify-content:flex-end; }
     .message-bubble { margin:0;border:1px solid #3c3443;background:#28232e;padding:11px 14px;border-radius:16px 16px 16px 4px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.55; }
     .own .message-bubble { background:#7036ad;border-color:#8547c2;border-radius:16px 16px 4px 16px;color:#fff; }
@@ -102,7 +106,7 @@
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
-        <div class="app-version">Daily chat · 20261115-1</div>
+        <div class="app-version">Daily chat · 20261115-2</div>
       </div>
     </div>
     <div class="title">WORD5</div>
@@ -134,8 +138,8 @@
   <script src="js/amber-signer.js?v=20261111-1"></script>
   <script src="js/nostr-session.js?v=20261111-1"></script>
   <script src="js/nostr-signers.js?v=20261111-1"></script>
-  <script src="js/nostr-ui.js?v=20261111-1"></script>
-  <script src="js/chat-crypto.js?v=20261115-1"></script>
-  <script src="js/daily-chat.js?v=20261115-1"></script>
+  <script src="js/nostr-ui.js?v=20261115-2"></script>
+  <script src="js/chat-crypto.js?v=20261115-2"></script>
+  <script src="js/daily-chat.js?v=20261115-2"></script>
 </body>
 </html>
