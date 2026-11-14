@@ -54,8 +54,16 @@ export class DailyChat {
     }
     eligible(body.period);
     if (action === 'read') {
-      const rows = db.query('SELECT event FROM chat_messages WHERE period=?1 ORDER BY received DESC,rowid DESC LIMIT 200').all(body.period) as {event:string}[];
-      return {ok:true, messages:rows.reverse().map(row=>JSON.parse(row.event)), now};
+      if (body.after !== undefined && (typeof body.after !== 'string' || !/^[0-9a-f]{64}$/.test(body.after))) throw new Error('Invalid chat cursor');
+      // Event IDs are stable cursor anchors. Missing/pruned anchors explicitly
+      // reset the client to the bounded current snapshot, rather than losing a gap.
+      const anchor = body.after === undefined ? null : db.query('SELECT rowid AS position FROM chat_messages WHERE period=?1 AND id=?2').get(body.period,body.after) as {position:number}|null;
+      const reset = !anchor;
+      const rows = reset
+        ? (db.query('SELECT id,event FROM chat_messages WHERE period=?1 ORDER BY rowid DESC LIMIT 200').all(body.period) as {id:string,event:string}[]).reverse()
+        : db.query('SELECT id,event FROM chat_messages WHERE period=?1 AND rowid>?2 ORDER BY rowid LIMIT 200').all(body.period,anchor.position) as {id:string,event:string}[];
+      const newest = db.query('SELECT id FROM chat_messages WHERE period=?1 ORDER BY rowid DESC LIMIT 1').get(body.period) as {id:string}|null;
+      return {ok:true, messages:rows.map(row=>JSON.parse(row.event)), cursor:newest?.id ?? null, reset, now};
     }
     if (Object.keys(body).sort().join(',') !== 'action,ciphertext,iv,nonce,period' ||
         typeof body.iv !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(body.iv) ||
@@ -65,7 +73,7 @@ export class DailyChat {
     if (recent.n >= 10 || (recent.last !== null && now-recent.last < 2000)) throw new Error('Sending too quickly; wait a moment');
     db.transaction(() => {
       db.query('INSERT INTO chat_messages VALUES (?1,?2,?3,?4,?5)').run(event.id,body.period,event.pubkey,now,JSON.stringify(event));
-      db.query('DELETE FROM chat_messages WHERE period=?1 AND id NOT IN (SELECT id FROM chat_messages WHERE period=?1 ORDER BY received DESC,rowid DESC LIMIT 200)').run(body.period);
+      db.query('DELETE FROM chat_messages WHERE period=?1 AND id NOT IN (SELECT id FROM chat_messages WHERE period=?1 ORDER BY rowid DESC LIMIT 200)').run(body.period);
     })();
     return {ok:true, id:event.id, now};
   }

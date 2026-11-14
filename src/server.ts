@@ -131,7 +131,7 @@ const server = Bun.serve({
       // Page loads and API access also discard expired rooms for anonymous visitors.
       if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261115-1", scoreRecap: scoreAnnouncer.status(),
+        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261115-3", scoreRecap: scoreAnnouncer.status(),
           publicData: publicDataPublisher.status(),
           socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
       }

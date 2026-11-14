@@ -20,6 +20,13 @@
       const prefix = 'word5-chat:';
       for (let i=storage.length-1;i>=0;i--) {
         const name = storage.key(i);
+        if (name?.startsWith('word5-chat-messages:')) {
+          try {
+            const value=JSON.parse(storage.getItem(name));
+            if (!identity||name!==`word5-chat-messages:${identity}`||!Number.isSafeInteger(value?.period)||value.period!==Math.floor(now/86400000)||value.expiresAt!==(value.period+1)*86400000||!Array.isArray(value.events)||value.events.length>200) storage.removeItem(name);
+          } catch { storage.removeItem(name); }
+          continue;
+        }
         if (!name?.startsWith(prefix)) continue;
         try {
           const value = JSON.parse(storage.getItem(name));

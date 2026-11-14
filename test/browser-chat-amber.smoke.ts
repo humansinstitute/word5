@@ -86,6 +86,7 @@ try {
  check(!await page.evaluate(()=>localStorage.getItem('word5-amber-pending-v1')),'expiry cancels only matching opened Amber chat request');
  await page.locator('#chatRefresh').click();await approve('rooms');await approve('read',true);
  await page.locator('#chatMessages').getByText(message,{exact:true}).waitFor();
+ await page.waitForFunction(()=>!sessionStorage.getItem('word5-chat-pending-v1'));
  check(!await page.evaluate(()=>sessionStorage.getItem('word5-chat-pending-v1')),'manual Amber return preserves same-identity request without duplicate submission');
  // Rollover while the next send waits for approval clears messages, keys and staged ciphertext.
  await page.locator('#chatText').fill('pending draft must disappear');await page.locator('#chatSend').click();

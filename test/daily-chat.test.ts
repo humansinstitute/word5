@@ -63,3 +63,29 @@ test('room history is bounded to the latest 200 ciphertext messages',()=>{
  expect(service.db.query('SELECT COUNT(*) AS n FROM chat_messages').get()).toEqual({n:200});
  const at=now+205*7000;expect((chat.request(event(sk,'read',{period},at),'read',at) as any).messages).toHaveLength(200);
 });
+
+test('delta reads use stable receipt-order anchors, return empty unchanged responses and reset pruned cursors',()=>{
+ const {service,chat}=fixture(),sk=generateSecretKey();finish(service,sk);
+ const messages=Array.from({length:3},(_,i)=>event(sk,'send',{period,iv:'AAAAAAAAAAAAAAAA',ciphertext:'A'.repeat(24)},now+i));
+ // Receipt order is authoritative even when sender timestamps/received clocks tie or move backward.
+ for(const [i,e] of messages.entries())service.db.query('INSERT INTO chat_messages VALUES (?1,?2,?3,?4,?5)').run(e.id,period,e.pubkey,now-i,JSON.stringify(e));
+ const full=chat.request(event(sk,'read',{period}),'read',now) as any;
+ expect(full.messages.map((e:any)=>e.id)).toEqual(messages.map(e=>e.id));expect(full.reset).toBe(true);expect(full.cursor).toBe(messages[2].id);
+ const delta=chat.request(event(sk,'read',{period,after:messages[0].id}),'read',now) as any;
+ expect(delta.messages.map((e:any)=>e.id)).toEqual(messages.slice(1).map(e=>e.id));expect(delta.reset).toBe(false);expect(delta.cursor).toBe(messages[2].id);
+ const unchanged=chat.request(event(sk,'read',{period,after:messages[2].id}),'read',now) as any;
+ expect(unchanged.messages).toEqual([]);expect(unchanged.reset).toBe(false);expect(unchanged.cursor).toBe(messages[2].id);
+ service.db.query('DELETE FROM chat_messages WHERE id=?1').run(messages[0].id);
+ const reset=chat.request(event(sk,'read',{period,after:messages[0].id}),'read',now) as any;
+ expect(reset.reset).toBe(true);expect(reset.messages.map((e:any)=>e.id)).toEqual(messages.slice(1).map(e=>e.id));
+ const other=generateSecretKey();expect(()=>chat.request(event(other,'read',{period,after:messages[2].id}),'read',now)).toThrow('Finish');
+ expect(()=>chat.request(event(sk,'read',{period,after:'not-an-id'}),'read',now)).toThrow('cursor');
+ service.db.query('DELETE FROM chat_messages').run();const empty=chat.request(event(sk,'read',{period,after:messages[2].id}),'read',now) as any;expect(empty.messages).toEqual([]);expect(empty.reset).toBe(true);expect(empty.cursor).toBeNull();
+});
+test('ciphertext cache is current-day and account scoped and expires with the room key',()=>{
+ const map=new Map<string,string>();const storage={get length(){return map.size},key:(i:number)=>[...map.keys()][i],getItem:(k:string)=>map.get(k),setItem:(k:string,v:string)=>map.set(k,v),removeItem:(k:string)=>map.delete(k)};
+ const expiresAt=(period+1)*PERIOD_MS;
+ map.set('word5-chat-messages:a',JSON.stringify({period,expiresAt,events:[],cursor:null}));map.set('word5-chat-messages:b','{}');
+ cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has('word5-chat-messages:a')).toBe(true);expect(map.has('word5-chat-messages:b')).toBe(false);
+ cryptoUI.prune(storage,'a',expiresAt);expect(map.has('word5-chat-messages:a')).toBe(false);
+});

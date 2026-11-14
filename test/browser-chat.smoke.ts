@@ -83,6 +83,7 @@ try {
     (window as any).NostrSession.updatePlayer({auth_mode:'amber',linked_pubkey:pk});
    },pk);
    await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
+   await page.waitForFunction(()=>(window as any).amberChatSigns>=2&&!sessionStorage.getItem('word5-chat-pending-v1'));
    const before=await page.evaluate(()=>(window as any).amberChatSigns);
    await page.waitForTimeout(10500);
    if(await page.evaluate(()=>(window as any).amberChatSigns)!==before) throw new Error('Amber received unsolicited polling request');

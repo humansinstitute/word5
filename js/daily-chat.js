@@ -10,6 +10,27 @@
   const initialPlayer = window.NostrSession?.getPlayer?.();
   Word5ChatCrypto.prune(sessionStorage, signedIn() ? (initialPlayer.linked_pubkey || initialPlayer.pubkey) : null);
   const pendingKey = 'word5-chat-pending-v1';
+  const messagePrefix = 'word5-chat-messages:';
+  let messageBinding = '', messageCursor = null, messageRecords = new Map(), retryAt = 0, readFailures = 0;
+  function clearMessages() {
+    messageBinding=''; messageCursor=null; messageRecords.clear();
+    $('chatMessages')?.replaceChildren();
+  }
+  function connectionMessage(error) {
+    if (error instanceof TypeError || ['AbortError','TimeoutError'].includes(error.name)) {
+      return messageRecords.size ? 'Connection interrupted. Showing cached messages; tap Refresh to reconnect.' : 'Could not connect to chat. Check your connection and tap Refresh to retry.';
+    }
+    return error.message || 'Chat unavailable; tap Refresh to retry.';
+  }
+  const roomBinding = room => `${identity}:${room.period}:${room.key}`;
+  async function keyFingerprint(room) {
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(room.key))),b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  async function saveMessages(room,run) {
+    const key=await keyFingerprint(room);
+    if (run!==generation || selectedRoom()!==room || room.expiresAt<=Date.now()) return;
+    try { sessionStorage.setItem(`${messagePrefix}${identity}`,JSON.stringify({period:room.period,expiresAt:room.expiresAt,key,events:[...messageRecords.values()].map(record=>record.event),cursor:messageCursor})); } catch { /* Storage is optional; keep the visible in-memory conversation. */ }
+  }
   function pendingRequest() {
     try {
       const saved=JSON.parse(sessionStorage.getItem(pendingKey) || 'null');
@@ -51,8 +72,9 @@
       const event=await signer.signEvent(template);
       if (event.pubkey!==identity) throw new Error('Signer identity mismatch');
       if (usesAmber() && $('amberRequest')?.textContent.includes('Amber signature received')) $('amberRequest').remove();
-      const response=await fetch(`api/chat/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event})});
-      const result=await response.json();
+      const response=await fetch(`api/chat/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event}),signal:AbortSignal.timeout(15000)});
+      let result;
+      try { result=await response.json(); } catch { throw new Error(`Chat unavailable (${response.status}); tap Refresh to retry.`); }
       if (!response.ok || !result.ok) throw new Error(result.error || 'Chat unavailable');
       return result;
     } finally {
@@ -72,7 +94,7 @@
     } catch { sessionStorage.removeItem(pendingKey); }
     rooms = rooms.filter(room=>room.expiresAt>Date.now());
     if (expired) {
-      generation++;
+      generation++; clearMessages();
       if ($('chatText')) { $('chatText').value=''; sizeComposer(); }
       renderRooms();
       if ($('chatStatus')) $('chatStatus').textContent='A new word is here. Finish today’s puzzle to join its chat.';
@@ -82,40 +104,52 @@
   }
   async function refresh() {
     const run = ++generation;
-    rooms = []; forceScroll=true;
-    if ($('chatNav')) $('chatNav').hidden=true;
-    renderRooms();
-    if (!signedIn()) { identity = null; prune(); if ($('chatStatus')) $('chatStatus').textContent = 'Finish today’s puzzle to unlock chat.'; return; }
+    retryAt=0;
+    if (!signedIn()) {
+      identity=null; rooms=[]; clearMessages(); prune(); renderRooms();
+      if ($('chatStatus')) $('chatStatus').textContent='Finish today’s puzzle to unlock chat.';
+      return;
+    }
     try {
-      const signer = await NostrSigners.getActiveSigner();
-      const pk = await signer.getPublicKey();
-      if (run !== generation) return;
-      identity = pk;
-      identityMode = window.NostrSession?.getPlayer?.()?.auth_mode;
-      Word5ChatCrypto.prune(sessionStorage, identity);
+      const signer=await NostrSigners.getActiveSigner(), pk=await signer.getPublicKey();
+      if (run!==generation) return;
+      if (identity && identity!==pk) { rooms=[]; clearMessages(); }
+      identity=pk; identityMode=window.NostrSession?.getPlayer?.()?.auth_mode;
+      Word5ChatCrypto.prune(sessionStorage,identity);
+      // The same tab's previously authorized current-day key may restore its
+      // ciphertext cache offline. Completion is immutable; new reads still use
+      // signed server authorization and no previous-day room is restored.
+      if (!rooms.length) {
+        try { rooms=JSON.parse(sessionStorage.getItem(`word5-chat:${identity}`)||'[]').filter(room=>room.period===Math.floor(Date.now()/86400000)&&room.expiresAt===(room.period+1)*86400000&&typeof room.key==='string'); } catch { rooms=[]; }
+      }
+      prune(); renderRooms();
+      const oldRoom=selectedRoom();
+      if (oldRoom) await hydrateMessages(oldRoom,run);
+      if (run!==generation) return;
       const pending=pendingRequest();
       let result;
       if (pending) {
         const action=JSON.parse(pending.template.content).action;
-        const cached=JSON.parse(sessionStorage.getItem(`word5-chat:${identity}`) || '[]');
         const resumed=await transmit(pending.template);
         if (run!==generation || !signedIn()) return;
         if (action==='rooms') result=resumed;
-        else if (Array.isArray(cached) && cached.length===1 && cached[0].period===pending.period && cached[0].expiresAt===(pending.period+1)*86400000) {
-          rooms=cached; prune(); renderRooms();
-          if ($('chatStatus')) $('chatStatus').textContent='';
-          await read(action==='read' ? resumed : null);
-          return;
+        else if (selectedRoom()?.period===pending.period) {
+          await read(action==='read' ? resumed : null,true); return;
         }
       }
       result ||= await request('rooms');
-      if (run !== generation || !signedIn()) return;
-      rooms = result.rooms;
+      if (run!==generation || !signedIn()) return;
+      const previous=selectedRoom();
+      const next=result.rooms[0];
+      if (!next || !previous || roomBinding(next)!==roomBinding(previous)) { rooms=result.rooms; clearMessages(); }
+      // Retain the same room object so existing DOM/enrichment guards stay valid.
+      else rooms=[previous];
       sessionStorage.setItem(`word5-chat:${identity}`,JSON.stringify(rooms));
       prune(); renderRooms();
-      if ($('chatStatus')) $('chatStatus').textContent = rooms.length ? '' : 'Finish today’s puzzle to unlock chat.';
-      await read();
-    } catch (error) { if (run===generation && $('chatStatus')) $('chatStatus').textContent = error.message; }
+      if (!rooms.length) { sessionStorage.removeItem(`${messagePrefix}${identity}`); }
+      if ($('chatStatus')) $('chatStatus').textContent=rooms.length ? '' : 'Finish today’s puzzle to unlock chat.';
+      await read(null,true);
+    } catch(error) { if (run===generation && $('chatStatus')) $('chatStatus').textContent=connectionMessage(error); }
   }
   function updateEmpty() {
     const empty = $('chatEmpty');
@@ -220,20 +254,7 @@
       }
     }).catch(()=>{});
   }
-  async function read(resumed = null) {
-    const room = selectedRoom(), run = generation;
-    if (!$('chatMessages') || !room || polling) return;
-    polling = true;
-    try {
-      const result = resumed || await request('read',{period:room.period});
-      const {verifyEvent,getEventHash} = await import('https://esm.sh/nostr-tools@2?bundle');
-      const nodes = [];
-      for (const event of result.messages) {
-        try {
-          if (!verifyEvent(event) || getEventHash(event)!==event.id || event.kind!==30078 || event.tags.length!==1 || event.tags[0].join(':')!=='schema:word5.chat.v1') continue;
-          const body = JSON.parse(event.content);
-          if (body.period!==room.period || body.action!=='send') continue;
-          const text = await Word5ChatCrypto.decrypt(body,room.key,event.pubkey);
+  function messageNode(event,text) {
           const own = event.pubkey === identity;
           const item = document.createElement('li'); item.className=`chat-message${own ? ' own' : ''}`; item.dataset.messageId=event.id;
           const avatar=document.createElement('div'); avatar.className='message-avatar'; avatar.textContent=own ? 'ME' : event.pubkey.slice(0,2).toUpperCase(); avatar.setAttribute('aria-hidden','true');
@@ -246,22 +267,71 @@
           const message=document.createElement('p'); message.className='message-bubble'; message.textContent=text;
           const ownLabel=document.createElement('span');ownLabel.className='message-own';ownLabel.textContent=own ? 'You' : '';ownLabel.hidden=true;
           const badge=document.createElement('span');badge.className='message-result';
-          meta.append(sender,ownLabel,badge,time); content.append(meta,message); item.append(avatar,content); nodes.push(item);
-        } catch { /* Ignore malformed or unauthentic ciphertext. */ }
+          meta.append(sender,ownLabel,badge,time); content.append(meta,message); item.append(avatar,content); return item;
+  }
+  async function mergeMessages(events,room,run,reset=false) {
+    const {verifyEvent,getEventHash}=await import('https://esm.sh/nostr-tools@2?bundle');
+    const next=reset ? new Map() : new Map(messageRecords);
+    for (const event of events) {
+      if (next.has(event.id)) continue;
+      const known=messageRecords.get(event.id);
+      if (known) { next.set(event.id,known); continue; }
+      try {
+        if (!verifyEvent(event)||getEventHash(event)!==event.id||event.kind!==30078||event.tags.length!==1||event.tags[0].join(':')!=='schema:word5.chat.v1') continue;
+        const body=JSON.parse(event.content);
+        if (body.period!==room.period||body.action!=='send') continue;
+        const text=await Word5ChatCrypto.decrypt(body,room.key,event.pubkey);
+        const node=messageNode(event,text); next.set(event.id,{event,node});
+      } catch { /* Ignore malformed, unauthentic or wrong-key ciphertext. */ }
+    }
+    if (run!==generation||selectedRoom()!==room||room.expiresAt<=Date.now()) return false;
+    while(next.size>200) next.delete(next.keys().next().value);
+    const list=$('chatMessages'),history=$('chatHistory');
+    const follow=forceScroll||!history||history.scrollHeight-history.scrollTop-history.clientHeight<100;
+    for (const [id,record] of messageRecords) if(!next.has(id)) record.node.remove();
+    let position=0;
+    for (const record of next.values()) { if(list.children[position]!==record.node) list.insertBefore(record.node,list.children[position]||null);position++; }
+    messageRecords=next;
+    for(const {node} of next.values()) if(node.isConnected&&node.dataset.metadataGeneration!==String(run)) {
+      node.dataset.metadataGeneration=String(run);enrichSender(node,node.dataset.senderPubkey,room,run,identity);
+    }
+    updateEmpty();
+    if(follow&&history) history.scrollTop=history.scrollHeight;
+    forceScroll=false;
+    return true;
+  }
+  async function hydrateMessages(room,run) {
+    if (!$('chatMessages')||run!==generation||selectedRoom()!==room||room.expiresAt<=Date.now()) return;
+    const binding=roomBinding(room);
+    if (messageBinding===binding) return;
+    clearMessages(); messageBinding=binding;
+    try {
+      const cached=JSON.parse(sessionStorage.getItem(`${messagePrefix}${identity}`)||'null');
+      if (!cached||cached.period!==room.period||cached.expiresAt!==room.expiresAt||cached.key!==await keyFingerprint(room)||!Array.isArray(cached.events)||cached.events.length>200) return;
+      if (await mergeMessages(cached.events,room,run,true)) messageCursor=typeof cached.cursor==='string'&&/^[0-9a-f]{64}$/.test(cached.cursor) ? cached.cursor : null;
+    } catch { /* An invalid cache never replaces a valid server response. */ }
+  }
+  async function read(resumed=null,manual=false) {
+    const room=selectedRoom(),run=generation;
+    if (!$('chatMessages')||!room||polling||(!manual&&Date.now()<retryAt)) return;
+    polling=true;
+    try {
+      await hydrateMessages(room,run);
+      if(run!==generation||selectedRoom()!==room) return;
+      const result=resumed||await request('read',{period:room.period,...(messageCursor?{after:messageCursor}:{})});
+      if (!Array.isArray(result.messages)||result.messages.length>200) throw new Error('Invalid chat response');
+      // Old servers ignore `after` and return a full snapshot; no client upgrade
+      // requires a simultaneous server rollout.
+      const incremental=typeof result.reset==='boolean'&&('cursor' in result);
+      if(await mergeMessages(result.messages,room,run,!incremental||result.reset)) {
+        messageCursor=incremental&&typeof result.cursor==='string'&&/^[0-9a-f]{64}$/.test(result.cursor) ? result.cursor : null;
+        readFailures=0;retryAt=0;
+        if($('chatStatus'))$('chatStatus').textContent='';
+        await saveMessages(room,run);
       }
-      if (run===generation && selectedRoom()===room && room.expiresAt>Date.now()) {
-        const list=$('chatMessages'), history=$('chatHistory');
-        const changed=nodes.length!==list.children.length || nodes.some((node,index)=>node.dataset.messageId!==list.children[index]?.dataset.messageId);
-        if(changed) {
-          const follow=forceScroll || !history || history.scrollHeight-history.scrollTop-history.clientHeight<100;
-          list.replaceChildren(...nodes); updateEmpty();
-          for (const item of nodes) enrichSender(item,item.dataset.senderPubkey,room,run,identity);
-          if(follow && history) history.scrollTop=history.scrollHeight;
-        }
-        forceScroll=false;
-      }
-    } catch(error) { if (run===generation) $('chatStatus').textContent=error.message; }
-    finally { polling=false; }
+    } catch(error) {
+      if(run===generation) { retryAt=Date.now()+Math.min(60000,10000*2**Math.min(readFailures++,3));$('chatStatus').textContent=connectionMessage(error); }
+    } finally { polling=false; }
   }
   async function discuss() {
     if (!signedIn()) { $('loginNostrBtn')?.click(); return; }
@@ -271,6 +341,7 @@
   window.Word5Chat={refresh,discuss};
   document.addEventListener('visibilitychange',()=>{ if (!document.hidden) { prune(); if (!usesAmber()) void read(); } });
   window.addEventListener('focus',()=>{ prune(); });
+  window.addEventListener('online',()=>{ retryAt=0;if (!usesAmber()) { if(selectedRoom())void read(null,true);else void refresh(); } });
   window.addEventListener('player-ready',()=>{
     if (!started) return;
     const p=window.NostrSession?.getPlayer?.();
@@ -280,7 +351,7 @@
     if (nextIdentity===identity && p?.auth_mode===identityMode) return;
     if ($('chatText')) $('chatText').value='';
     completionHintUntil=0;
-    generation++; identity=null; rooms=[]; forceScroll=true;
+    generation++; identity=null; rooms=[]; forceScroll=true; clearMessages();
     Word5ChatCrypto.prune(sessionStorage,nextIdentity);
     try { if (JSON.parse(sessionStorage.getItem(pendingKey) || 'null')?.pubkey!==nextIdentity) sessionStorage.removeItem(pendingKey); } catch { sessionStorage.removeItem(pendingKey); }
     renderRooms(); if (!usesAmber() || $('chatMessages')) void refresh();
@@ -301,11 +372,11 @@
       $('chatSend').disabled=true;
       try {
         // Encryption AAD uses the same nonce as the signed request.
-        const messageNonce=nonce();
-        const payload=await Word5ChatCrypto.encrypt($('chatText').value,room.key,room.period,identity,messageNonce);
+        const messageNonce=nonce(),submittedText=$('chatText').value;
+        const payload=await Word5ChatCrypto.encrypt(submittedText,room.key,room.period,identity,messageNonce);
         await request('send',{period:room.period,nonce:messageNonce,...payload});
-        if(run===generation) { $('chatText').value=''; sizeComposer(); forceScroll=true; $('chatStatus').textContent=''; await read(); }
-      } catch(error) { if(run===generation) $('chatStatus').textContent=error.message; }
+        if(run===generation) { if($('chatText').value===submittedText) { $('chatText').value=''; sizeComposer(); } forceScroll=true; $('chatStatus').textContent=''; await read(null,true); }
+      } catch(error) { if(run===generation) $('chatStatus').textContent=connectionMessage(error); }
       finally { if(run===generation) $('chatSend').disabled=!selectedRoom(); }
     });
     $('chatText')?.addEventListener('input',sizeComposer);
