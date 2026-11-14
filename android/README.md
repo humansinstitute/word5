@@ -49,3 +49,9 @@ Manual profile streak corrections require an informed confirmation, then Amber s
 The inner save schema is now `word5.native-backup.v2`, with strict migration of legacy v1. The encrypted outer schema and server transport remain unchanged. Older clients reject v2 rather than silently dropping corrections. Debug builds use `ai.otherstuff.word5.visualreview` so review fixtures cannot overwrite the release app or its data.
 
 See [the native action inventory](web-parity.md) for the intentional Amber/private-default differences and action contracts. Review screenshots and run-specific evidence belong in ignored handoffs, not this repository's reusable documentation.
+
+## Android adaptive launcher icon
+
+The manifest uses `@mipmap/ic_launcher` for both `icon` and `roundIcon`. Android 8+ selects the adaptive resource in `mipmap-anydpi-v26`, with independent full-bleed background and safe foreground layers. Earlier Android versions retain the legacy fallback. The blue background fills the mask; the existing board artwork bytes are retained and inset 29 dp on the 108 dp layer.
+
+When updating artwork, inspect both a circle and a squircle mask over the central 72 dp of the 108 dp layers, and keep essential foreground details within the central 66 dp safe circle. Check the merged release manifest and packaged resources, then run the app’s documented release build and lint. Launcher caches may need a normal refresh after an in-place update; never uninstall or clear user data to refresh an icon.
