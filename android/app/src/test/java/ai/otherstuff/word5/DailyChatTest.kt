@@ -25,6 +25,8 @@ class DailyChatTest {
         var now=20768L*86400000+100000
         val period get()=Rules.period(now)
         val completed=mutableSetOf<String>()
+        val previousCompleted=mutableSetOf<String>()
+        val outcomes=mutableMapOf<Pair<String,Long>,String>()
         val messages=mutableListOf<Event>()
         val requests=mutableSetOf<String>()
         val calls=mutableListOf<Pair<String,Event>>()
@@ -38,19 +40,28 @@ class DailyChatTest {
             assertFalse(isPublicRelayPayload(event))
             if(path=="api/completion") {
                 val body=JSONObject(event.content);assertEquals("word5.completion.v1",event.tag("schema"));assertTrue(body.getJSONArray("guesses").length() in 1..6)
-                completed+=event.pubkey;return JSONObject().put("ok",true)
+                completed+=event.pubkey;outcomes[event.pubkey to period]=body.getString("result");return JSONObject().put("ok",true)
             }
             assertEquals(listOf(listOf("schema",CHAT_SCHEMA)),event.tags)
             val body=JSONObject(event.content);val action=path.substringAfterLast('/');assertEquals(action,body.getString("action"));assertTrue(body.getString("nonce").matches(Regex("[0-9a-f]{32}")))
             if(!requests.add(event.id))throw ApiRejection("Replayed chat request",400)
-            if(action=="rooms")return JSONObject().put("ok",true).put("rooms",array(if(event.pubkey in completed)listOf(JSONObject().put("period",period).put("date",java.time.LocalDate.ofEpochDay(period).toString()).put("word","JOKER").put("expiresAt",(period+1)*86400000).put("key",Base64.getEncoder().encodeToString(ByteArray(32){period.toByte()})))else emptyList<Any>()))
-            check(event.pubkey in completed && body.getLong("period")==period){"Finish this puzzle or room expired"}
+            if(action=="rooms") {
+                val extended=body.optBoolean("includePrevious")
+                val days=if(extended)listOf(period,period-1)else listOf(period)
+                val eligible=days.filter{if(it==period)event.pubkey in completed else event.pubkey in previousCompleted}
+                eligible.forEach{day->outcomes.putIfAbsent(event.pubkey to day,if(day==period)"2"else"X")}
+                return JSONObject().put("ok",true).put("rooms",array(eligible.map{day->JSONObject().put("period",day).put("date",java.time.LocalDate.ofEpochDay(day).toString()).put("word",if(day==period)"JOKER"else"CRANE").put("expiresAt",(day+if(extended)2 else 1)*86400000).put("key",Base64.getEncoder().encodeToString(ByteArray(32){day.toByte()}))}))
+            }
+            val requested=body.getLong("period")
+            check(requested in (period-1)..period && if(requested==period)event.pubkey in completed else event.pubkey in previousCompleted){"Finish this puzzle or room expired"}
             if(action=="read") {
                 beforeRead?.invoke()
-                val after=body.optString("after");val anchor=messages.indexOfFirst{it.id==after};val reset=after.isEmpty() || anchor<0
-                val selected=if(!delta || reset)messages.takeLast(200)else messages.drop(anchor+1)
+                val retained=messages.filter{JSONObject(it.content).getLong("period")==requested}
+                val after=body.optString("after");val anchor=retained.indexOfFirst{it.id==after};val reset=after.isEmpty() || anchor<0
+                val selected=if(!delta || reset)retained.takeLast(200)else retained.drop(anchor+1)
                 readRows=selected.size
-                return JSONObject().put("ok",true).put("messages",array(selected.map{it.json()})).also{if(delta)it.put("reset",reset).put("cursor",messages.lastOrNull()?.id ?: JSONObject.NULL)}
+                val results=JSONObject();retained.map{it.pubkey}.distinct().forEach{pubkey->val result=outcomes[pubkey to requested]?:if(requested==period)"2"else"X";results.put(pubkey,JSONObject().put("period",requested).put("won",result!="X").put("attempts",if(result=="X")6 else result.toInt()))}
+                return JSONObject().put("ok",true).put("messages",array(selected.map{it.json()})).put("results",results).also{if(delta)it.put("reset",reset).put("cursor",retained.lastOrNull()?.id ?: JSONObject.NULL)}
             }
             if(rejectSend){rejectSend=false;throw ApiRejection("Sending too quickly; wait a moment",400)}
             assertEquals(setOf("action","nonce","period","iv","ciphertext"),body.keys().asSequence().toSet())
@@ -80,6 +91,7 @@ class DailyChatTest {
             assertEquals(if(loss)"X" else "2",JSONObject(server.calls.first{it.first=="api/completion"}.second.content).getString("result"))
             assertTrue(server.calls.none{it.first.contains("publication")});assertFalse(room.active(Signer(3).owner,server.now))
             server.now=(server.period+1)*86400000
+            assertTrue(room.active(signer.owner,server.now));server.now=room.expiresAt
             assertFalse(room.active(signer.owner,server.now));assertThrows(IllegalStateException::class.java){runBlocking{client.read(signer.owner,room)}}
         }
     }
@@ -164,6 +176,63 @@ class DailyChatTest {
             client.send(signer.owner,room,"new draft")
             assertEquals(1,server.messages.size);assertEquals(1,server.calls.count{it.first=="api/chat/send"})
         }
+    }
+    @Test fun yesterdayOpensWithoutTodayCompletionAndCannotNewlyValidateHistoricalGuesses()=runBlocking {
+        val signer=Signer();val server=Server();server.previousCompleted+=signer.owner
+        val client=DailyChatClient(signer,server){server.now};val rooms=client.rooms(signer.owner)
+        assertEquals(listOf(server.period-1),rooms.map{it.period});assertTrue(JSONObject(server.calls.last().second.content).getBoolean("includePrevious"))
+        assertEquals((server.period+1)*86400000,rooms.single().expiresAt)
+        assertThrows(IllegalArgumentException::class.java){runBlocking{client.validateCompletion(signer.owner,Game(server.period-1,listOf("JOKER")),rules)}}
+        assertTrue(server.calls.none{it.first=="api/completion"});assertTrue(client.read(signer.owner,rooms.single()).isEmpty())
+        server.completed+=signer.owner;assertEquals(listOf(server.period,server.period-1),client.rooms(signer.owner).map{it.period})
+    }
+    @Test fun eachRoomKeepsOwnCursorMessagesResultsAndUncertainSendAcrossBothSwitchDirections()=runBlocking {
+        val signer=Signer();val server=Server();server.completed+=signer.owner;server.previousCompleted+=signer.owner;server.delta=true
+        val client=DailyChatClient(signer,server){server.now};val rooms=client.rooms(signer.owner);val today=rooms[0];val yesterday=rooms[1]
+        server.loseAck=true;try{client.send(signer.owner,today,"today lost ack");fail()}catch(_:IOException){}
+        client.cancelRequests();client.send(signer.owner,yesterday,"yesterday only")
+        val old=client.read(signer.owner,yesterday).single();assertEquals("yesterday only",old.text);assertEquals("X",client.results(signer.owner,yesterday)[signer.owner])
+        client.cancelRequests();client.send(signer.owner,today,"today lost ack")
+        assertEquals(2,server.messages.size);assertEquals(2,server.calls.count{it.first=="api/chat/send"})
+        assertEquals("today lost ack",client.read(signer.owner,today).single().text);assertEquals("2",client.results(signer.owner,today)[signer.owner])
+        client.cancelRequests();assertSame(old,client.read(signer.owner,yesterday).single());assertEquals(0,server.readRows)
+        assertEquals(old.id,JSONObject(server.calls.last().second.content).getString("after"));assertEquals(listOf("today lost ack"),client.cachedMessages(signer.owner,today).map{it.text})
+    }
+    @Test fun nonselectedExpiryDoesNotCancelValidRoomInflightAndExactAccessBoundaryWipes():Unit=runBlocking {
+        val signer=Signer();val server=Server();server.completed+=signer.owner;server.previousCompleted+=signer.owner
+        val client=DailyChatClient(signer,server){server.now};val rooms=client.rooms(signer.owner);val today=rooms[0];val yesterday=rooms[1]
+        client.read(signer.owner,yesterday);client.send(signer.owner,today,"still valid after rollover")
+        supervisorScope {
+            val entered=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();server.beforeRead={entered.complete(Unit);release.await()}
+            val read=async{client.read(signer.owner,today)};entered.await();server.now=(server.period+1)*86400000
+            assertFalse(yesterday.active(signer.owner,server.now));client.forget(yesterday);yesterday.discard();release.complete(Unit)
+            assertEquals("still valid after rollover",read.await().single().text)
+        }
+        server.beforeRead=null;server.now=today.expiresAt-1;assertTrue(today.active(signer.owner,server.now))
+        server.now=today.expiresAt;assertFalse(today.active(signer.owner,server.now));client.forget(today);today.discard();assertTrue(today.key.all{it==0.toByte()})
+        assertThrows(IllegalStateException::class.java){runBlocking{client.read(signer.owner,today)}}
+    }
+    @Test fun resultMetadataMustMatchSelectedDayAndCachedProfileOverridesOldFallback() {
+        val pubkey="a".repeat(64);val today=20768L;val yesterday=today-1
+        fun result(period:Long,won:Any,attempts:Any)=JSONObject().put(pubkey,JSONObject().put("period",period).put("won",won).put("attempts",attempts))
+        assertEquals(mapOf(pubkey to "5"),chatRoomResults(result(yesterday,true,5),yesterday))
+        assertTrue(chatRoomResults(result(today,true,2),yesterday).isEmpty())
+        assertTrue(chatRoomResults(result(yesterday,"false",6),yesterday).isEmpty())
+        assertTrue(chatRoomResults(result(yesterday,false,5),yesterday).isEmpty())
+        assertTrue(chatRoomResults(result(yesterday,true,2.5),yesterday).isEmpty())
+        assertEquals(mapOf(pubkey to "X"),chatRoomResults(result(yesterday,false,6),yesterday))
+        val fallback=ChatMember(result="2");val profile=JSONObject().put("display_name","Maya").put("picture","https://example.com/maya.png")
+        val returned=chatRoomMember(profile,fallback,"5");assertEquals("Maya",returned.name);assertEquals("5",returned.result);assertTrue(returned.picture.endsWith("maya.png"))
+        assertEquals("",chatRoomMember(profile,returned,"").result)
+    }
+    @Test fun midnightRequiresFreshTodayConsentAndCannotSubstituteNewGameForConfirmedOldPeriod()=runBlocking {
+        val signer=Signer();val server=Server();val client=DailyChatClient(signer,server){server.now}
+        val confirmed=Game(server.period,listOf("JOKER"));val oldPeriod=confirmed.period
+        client.rooms(signer.owner);server.now=(oldPeriod+1)*86400000
+        val newGame=Game(server.period,listOf("JOKER"))
+        assertThrows(IllegalArgumentException::class.java){runBlocking{client.validateCompletion(signer.owner,confirmed,rules,oldPeriod)}}
+        assertThrows(IllegalArgumentException::class.java){runBlocking{client.validateCompletion(signer.owner,newGame,rules,oldPeriod)}}
+        assertTrue(server.calls.none{it.first=="api/completion"})
     }
     @Test fun namesPhotosAndResultsAreBoundedSafeAndCurrentDayOnly() {
         val pubkey="a".repeat(64);val profile=JSONObject().put("display_name","Maya <img src=x>").put("picture","javascript:alert(1)")

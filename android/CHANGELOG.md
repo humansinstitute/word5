@@ -1,3 +1,7 @@
+# 1.0.6
+
+Visit yesterday’s chat alongside today using simple navigation buttons. Each room keeps its own completion gate, draft, cached messages, scroll position and correctly dated result badges. Yesterday remains available before finishing today when its result was already verified. Rooms close after their day as yesterday; expired keys and local room state are removed. Today’s private-game validation still requires informed confirmation and never posts to Nostr. Existing native games, statistics, hard-mode settings and encrypted backup remain unchanged.
+
 # 1.0.5
 
 Daily chat is now native: one date-and-word room for today’s finishers, encrypted messages, profile photos/names and result badges, cached incremental refresh, offline retry and explicit Amber approval/cancellation. Private native completions unlock only after confirming score validation with Word5; no public Nostr post is created. Already verified restored/web completions can join without resubmitting guesses. Rooms, keys, drafts and cached messages clear at the next word or account change. Existing account saves, statistics, hard-mode preferences and encrypted backup remain unchanged.

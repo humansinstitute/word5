@@ -4,7 +4,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.*
@@ -26,55 +26,74 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+class ChatScrollMemory(val list:LazyListState=LazyListState()) {
+    var count=0;var lastMessage:String?=null;var initialized=false
+}
+@Composable fun ChatDayNavigation(selected:Long,today:Long,onSelect:(Long)->Unit) {
+    Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal=12.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
+        Copy(if(selected==today)"Today’s chat" else "Yesterday’s chat",13,bold=true)
+        WebButton(if(selected==today)"See yesterday’s chat"else"See today’s chat",compact=true){onSelect(if(selected==today)today-1 else today)}
+    }
+}
 @Composable fun ChatScreen(m:GameModel,back:()->Unit) {
-    var confirm by remember(m.owner){mutableStateOf(false)}
+    var confirm by remember(m.owner,m.selectedChatPeriod){mutableStateOf(false)}
     var now by remember{mutableLongStateOf(System.currentTimeMillis())}
+    val scrolls=remember(m.owner){mutableMapOf<Long,ChatScrollMemory>()}
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     DisposableEffect(Unit){m.setChatVisible(true);onDispose{m.setChatVisible(false)}}
-    LaunchedEffect(m.owner){if(m.owner.isNotEmpty() && m.chatRoom==null)m.openChat()}
-    LaunchedEffect(Unit){var ticks=0;while(true){delay(1000);now=System.currentTimeMillis();m.chatTick();ticks++;if(ticks%10==0 && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && m.chatRoom!=null)m.refreshChat(false)}}
+    LaunchedEffect(m.owner){if(m.owner.isNotEmpty()&&m.chatRoom==null)m.openChat()}
+    LaunchedEffect(Unit){var ticks=0;while(true){delay(1000);now=System.currentTimeMillis();m.chatTick();ticks++;if(ticks%10==0&&lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)&&m.chatRoom!=null)m.refreshChat(false)}}
+    val today=Rules.period(now);val yesterday=m.selectedChatPeriod==today-1
+    scrolls.keys.removeAll{it !in (today-1)..today}
     Box(Modifier.fillMaxSize()) {
-        val room=m.chatRoom
-        if(room!=null) ChatConversation(room,m.owner,m.chatMessages,m.chatMembers,m.chatDraft,m.chatStatus,m.chatBusy,now,m::editChat,m::sendChat,{if(m.chatBusy)m.cancelChat()else m.refreshChat()},back)
-        else Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Copy("Daily chat",21,bold=true);WebButton("Back",compact=true,onClick=back)}
-            Copy("One group for today’s finishers",14,Muted,modifier=Modifier.padding(top=12.dp))
-            Copy("The room is named for the date and word. Messages use a fresh shared server-generated key each day. The room, key and draft disappear when the next word starts.",13,Muted,modifier=Modifier.padding(top=16.dp))
-            Copy(m.chatStatus,13,if(m.chatBusy)Muted else Color.White,modifier=Modifier.padding(top=20.dp))
-            when {
-                m.owner.isEmpty()->WebButton("Login with Amber",Modifier.fillMaxWidth().padding(top=18.dp),primary=true){m.login()}
-                m.chatBusy->WebButton("Cancel chat action",Modifier.fillMaxWidth().padding(top=18.dp)){m.cancelChat()}
-                else->{
-                    WebButton("Check existing chat",Modifier.fillMaxWidth().padding(top=18.dp)){m.openChat()}
-                    if(m.completed() && m.state.current().guesses.isNotEmpty()) {
-                        Copy("Your native save is private. Unlocking chat is separate: Word5 receives today’s ordered guesses to validate your result and record its score. This does not post to public Nostr relays.",12,Muted,modifier=Modifier.padding(top=16.dp))
-                        WebButton("Validate result and unlock chat",Modifier.fillMaxWidth().padding(top=14.dp),primary=true){confirm=true}
-                    } else if(m.completed()) Copy("This restored result has no original guesses. You can join only if its completion was already verified by Word5. Missing guesses will never be invented.",12,Muted,modifier=Modifier.padding(top=16.dp))
-                    else WebButton("Return to today’s puzzle",Modifier.fillMaxWidth().padding(top=14.dp),primary=true,onClick=back)
+        Column(Modifier.fillMaxSize()) {
+            ChatDayNavigation(m.selectedChatPeriod,today){confirm=false;m.selectChatDay(it)}
+            Box(Modifier.weight(1f)) {
+                val room=m.chatRoom
+                if(room!=null)ChatConversation(room,m.owner,m.chatMessages,m.chatMembers,m.chatDraft,m.chatStatus,m.chatBusy,now,m::editChat,m::sendChat,{if(m.chatBusy)m.cancelChat()else m.refreshChat()},back,scrolls.getOrPut(room.period){ChatScrollMemory()})
+                else Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Copy(if(yesterday)"Yesterday’s chat"else"Daily chat",21,bold=true);WebButton("Back",compact=true,onClick=back)}
+                    Copy(if(yesterday)"Yesterday’s verified finishers"else"One group for today’s finishers",14,Muted,modifier=Modifier.padding(top=12.dp))
+                    Copy("Choose today or yesterday. Each room requires that day’s verified completion and has its own server-generated daily encryption key.",13,Muted,modifier=Modifier.padding(top=16.dp))
+                    Copy(m.chatStatus,13,if(m.chatBusy)Muted else Color.White,modifier=Modifier.padding(top=20.dp))
+                    when {
+                        m.owner.isEmpty()->WebButton("Login with Amber",Modifier.fillMaxWidth().padding(top=18.dp),primary=true){m.login()}
+                        m.chatBusy->WebButton("Cancel chat action",Modifier.fillMaxWidth().padding(top=18.dp)){m.cancelChat()}
+                        else->{
+                            WebButton(if(yesterday)"Check yesterday’s chat"else"Check existing chat",Modifier.fillMaxWidth().padding(top=18.dp)){m.openChat()}
+                            if(yesterday)Copy("Yesterday’s chat is available if you verified yesterday’s result with Word5. Completing today’s puzzle unlocks today’s room.",12,Muted,modifier=Modifier.padding(top=16.dp))
+                            else if(m.completed()&&m.state.current().guesses.isNotEmpty()) {
+                                Copy("Your native save is private. Unlocking today’s chat is separate: Word5 receives today’s ordered guesses to validate your result and record its score. No public Nostr post is created.",12,Muted,modifier=Modifier.padding(top=16.dp))
+                                WebButton("Validate result and unlock chat",Modifier.fillMaxWidth().padding(top=14.dp),primary=true){confirm=true}
+                            }else if(m.completed())Copy("This restored result has no original guesses. You can join only if its completion was already verified. Missing guesses will never be invented.",12,Muted,modifier=Modifier.padding(top=16.dp))
+                            else WebButton("Return to today’s puzzle",Modifier.fillMaxWidth().padding(top=14.dp),primary=true,onClick=back)
+                        }
+                    }
                 }
             }
         }
         if(confirm)WebModal({confirm=false},result=true){
             Copy("Validate result and unlock chat?",20,bold=true)
             Copy("Word5 will receive today’s ordered guesses, result and account signature to validate completion and record your score. Your encrypted backup stays separate. No public Nostr post is created.",13,Muted,modifier=Modifier.padding(top=16.dp))
-            Copy("Chat is encrypted with a shared daily key held by the server and today’s finishers; participants can retain copies.",12,Muted,modifier=Modifier.padding(top=12.dp))
+            Copy("Chat uses a shared daily key held by the server and that day’s finishers; participants can retain copies.",12,Muted,modifier=Modifier.padding(top=12.dp))
             Row(Modifier.padding(top=18.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)){WebButton("Cancel",Modifier.weight(1f)){confirm=false};WebButton("Join chat",Modifier.weight(1f),primary=true){confirm=false;m.unlockChat()}}
         }
     }
 }
 
 /** Native-only view; debug review fixtures cannot call a signer or API. */
-@Composable fun ChatConversation(room:ChatRoom,owner:String,messages:List<ChatMessage>,members:Map<String,ChatMember>,draft:String,status:String,busy:Boolean,now:Long,onDraft:(String)->Unit,onSend:()->Unit,onRefresh:()->Unit,onBack:()->Unit) {
-    val list=rememberLazyListState()
-    var previousCount by remember(room.period){mutableIntStateOf(0)}
-    LaunchedEffect(messages.lastOrNull()?.id){
-        val follow=messages.lastOrNull()?.pubkey==owner || previousCount==0 || list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let{it>=previousCount-2}!=false
+@Composable fun ChatConversation(room:ChatRoom,owner:String,messages:List<ChatMessage>,members:Map<String,ChatMember>,draft:String,status:String,busy:Boolean,now:Long,onDraft:(String)->Unit,onSend:()->Unit,onRefresh:()->Unit,onBack:()->Unit,scroll:ChatScrollMemory?=null) {
+    val memory=scroll?:remember(room.owner,room.period){ChatScrollMemory()};val list=memory.list
+    LaunchedEffect(room.period,messages.lastOrNull()?.id){
+        val last=messages.lastOrNull()?.id
+        if(memory.initialized&&memory.lastMessage==last)return@LaunchedEffect
+        val follow=messages.lastOrNull()?.pubkey==owner||memory.count==0||list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let{it>=memory.count-2}!=false
         if(messages.isNotEmpty()&&follow)list.scrollToItem(messages.lastIndex)
-        previousCount=messages.size
+        memory.count=messages.size;memory.lastMessage=last;memory.initialized=true
     }
     Column(Modifier.fillMaxSize().imePadding()) {
         Column(Modifier.fillMaxWidth().background(Panel).padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Column(Modifier.weight(1f)){Copy("${room.date} · ${room.word}",19,bold=true);Copy("Today’s finishers · spoilers welcome",12,Muted,modifier=Modifier.padding(top=4.dp))};WebButton("Back",compact=true,onClick=onBack)}
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Column(Modifier.weight(1f)){Copy("${room.date} · ${room.word}",19,bold=true);Copy(if(room.period==Rules.period(now))"Today’s finishers · spoilers welcome"else"Yesterday’s finishers · spoilers welcome",12,Muted,modifier=Modifier.padding(top=4.dp))};WebButton("Back",compact=true,onClick=onBack)}
             val seconds=maxOf(0,(room.expiresAt-now)/1000)
             Row(Modifier.fillMaxWidth().padding(top=14.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){WebButton(if(busy)"Cancel" else "Refresh",compact=true,onClick=onRefresh);Copy("Closes in ${seconds/3600}h ${seconds%3600/60}m",11,Muted)}
         }
@@ -92,7 +111,7 @@ import java.time.format.DateTimeFormatter
                 }
                 Box(Modifier.height(42.dp).width(58.dp).background(if(!busy&&draft.isNotBlank())Purple else Border,RoundedCornerShape(10.dp)).clickable(enabled=!busy&&draft.isNotBlank(),onClick=onSend),contentAlignment=Alignment.Center){Copy("Send",13,bold=true)}
             }
-            Copy("Encrypted group · closes with the next word",10,Muted,modifier=Modifier.padding(top=8.dp))
+            Copy("Encrypted group · room expiry shown above",10,Muted,modifier=Modifier.padding(top=8.dp))
         }
     }
 }

@@ -7,6 +7,8 @@ import androidx.compose.runtime.*
 import kotlinx.coroutines.*
 import java.io.File
 
+private data class ChatRoomView(val room:ChatRoom,val messages:List<ChatMessage> = emptyList(),val members:Map<String,ChatMember> = emptyMap(),val draft:String="")
+
 class GameModel(app: Application): AndroidViewModel(app) {
     val rules = Rules(app.assets.open("answers.txt").bufferedReader().readLines().map { it.trim() }.filter { it.length == 5 }, app.assets.open("wla.txt").bufferedReader().readLines().map { it.trim() }.filter { it.length == 5 })
     val amber = Amber(app)
@@ -47,10 +49,14 @@ class GameModel(app: Application): AndroidViewModel(app) {
     private var operation = 0L
     private var activePeriod = Rules.period()
     private val backup = Backup(amber, rules)
-    var chatRoom by mutableStateOf<ChatRoom?>(null); private set
-    var chatMessages by mutableStateOf<List<ChatMessage>>(emptyList()); private set
-    var chatMembers by mutableStateOf<Map<String,ChatMember>>(emptyMap()); private set
-    var chatDraft by mutableStateOf(""); private set
+    private var chatViews by mutableStateOf<Map<Long,ChatRoomView>>(emptyMap())
+    var selectedChatPeriod by mutableLongStateOf(Rules.period());private set
+    val chatRooms get()=chatViews.values.map{it.room}.sortedByDescending{it.period}
+    val chatRoom get()=chatViews[selectedChatPeriod]?.room
+    val chatMessages get()=chatViews[selectedChatPeriod]?.messages.orEmpty()
+    val chatMembers get()=chatViews[selectedChatPeriod]?.members.orEmpty()
+    val chatDraft get()=chatViews[selectedChatPeriod]?.draft.orEmpty()
+    private val chatProfiles=linkedMapOf<String,org.json.JSONObject>()
     var chatStatus by mutableStateOf("Finish today’s puzzle to unlock its chat."); private set
     var chatBusy by mutableStateOf(false); private set
     private var chatVisible=false
@@ -160,7 +166,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
         }
     }
     private fun rollover() {
-        if(activePeriod != Rules.period()) { clearChat("A new word is here. Finish today’s puzzle to unlock its chat."); activePeriod = Rules.period(); draft = ""; revealing = false; resultOpen = false; state = state.copy(); message = "A new daily puzzle is ready." }
+        if(activePeriod != Rules.period()) { activePeriod = Rules.period(); chatTick(); draft = ""; revealing = false; resultOpen = false; state = state.copy(); message = "A new daily puzzle is ready." }
     }
     fun onResume() { rollover(); chatTick(); if(!chatVisible)sync(); refreshProfile() }
     private fun refreshProfile() {
@@ -231,87 +237,115 @@ class GameModel(app: Application): AndroidViewModel(app) {
         val event=amber.sign(completionDraft(g,rules,account))
         check(owner==account); PublicNostr.api("api/completion",event)
     }
-    fun editChat(text:String) { chatTick();if(chatRoom!=null)chatDraft=text.take(2000) }
+    fun editChat(text:String) { chatTick();val view=chatViews[selectedChatPeriod]?:return;chatViews=chatViews+(selectedChatPeriod to view.copy(draft=text.take(2000))) }
     fun setChatVisible(visible:Boolean) { chatVisible=visible;chatTick();if(!visible&&!chatBusy)sync() }
-    fun chatTick() { if(chatRoom?.active(owner,System.currentTimeMillis())==false)clearChat("A new word is here. Finish today’s puzzle to unlock its chat.") }
-    private fun clearChat(status:String) {
-        chatEpoch++;chatJob?.cancel();chatMetadataJob?.cancel()
-        if(chatBusy) { amber.cancel();amber.interactive=false }
-        chatBusy=false;chatClient.reset();chatRoom?.discard();chatRoom=null;chatMessages=emptyList();chatMembers=emptyMap();chatDraft="";chatStatus=status
+    private fun stopChatAction() {
+        chatEpoch++;chatJob?.cancel();chatMetadataJob?.cancel();chatClient.cancelRequests()
+        if(chatBusy){amber.cancel();amber.interactive=false};chatBusy=false
     }
-    fun cancelChat() { chatEpoch++;chatJob?.cancel();amber.cancel();amber.interactive=false;chatBusy=false;chatStatus="Chat action cancelled. Your draft is kept; retry when ready." }
-    private fun chatAction(interactive:Boolean, action:suspend (String,Int,Long)->Unit) {
+    fun chatTick() {
+        val expired=chatViews.values.filter{!it.room.active(owner,System.currentTimeMillis())}
+        if(expired.any{it.room.period==selectedChatPeriod})stopChatAction()
+        expired.forEach{chatClient.forget(it.room);it.room.discard()}
+        if(expired.isNotEmpty())chatViews=chatViews-expired.map{it.room.period}.toSet()
+        chatClient.prune(owner)
+        if(selectedChatPeriod !in (Rules.period()-1)..Rules.period()) {
+            stopChatAction();selectedChatPeriod=Rules.period();chatStatus="Yesterday’s chat has closed. Finish today’s puzzle to join its room."
+        }
+    }
+    private fun clearChat(status:String) {
+        stopChatAction();chatClient.reset();chatViews.values.forEach{it.room.discard()};chatViews=emptyMap();chatProfiles.clear();selectedChatPeriod=Rules.period();chatStatus=status
+    }
+    fun cancelChat() { stopChatAction();chatStatus="Chat action cancelled. This room’s draft is kept; retry when ready." }
+    fun selectChatDay(period:Long) {
+        chatTick();if(period !in (Rules.period()-1)..Rules.period())return
+        stopChatAction();selectedChatPeriod=period;chatStatus=""
+        if(chatRoom!=null)refreshChat()else openChat()
+    }
+    private fun chatAction(interactive:Boolean,action:suspend(String,Int,Long)->Unit) {
         chatTick()
-        if(owner.isEmpty()) { chatStatus="Sign in with Amber to join daily chat.";return }
-        if(chatBusy || syncing || publicBusy) { if(interactive)chatStatus="Wait for the current Amber action to finish, then retry chat.";return }
-        val account=owner;val epoch=chatEpoch;val period=Rules.period()
-        chatBusy=true
+        if(owner.isEmpty()){chatStatus="Sign in with Amber to join daily chat.";return}
+        if(chatBusy||syncing||publicBusy){if(interactive)chatStatus="Wait for the current Amber action to finish, then retry chat.";return}
+        val account=owner;val epoch=chatEpoch;val period=selectedChatPeriod;chatBusy=true
         chatJob=viewModelScope.launch {
             amber.interactive=interactive
-            try { action(account,epoch,period) }
-            catch(e:CancellationException) { throw e }
-            catch(e:Exception) { if(owner==account && chatEpoch==epoch)chatStatus=when {
-                e.message?.contains("approval needed")==true -> "Chat needs Amber permission. Tap Refresh and approve kind30078; remembered permission enables automatic updates."
-                e is java.io.IOException -> "Chat is offline or the server is unavailable. Cached messages and your draft are kept; tap Refresh to retry."
-                e is org.json.JSONException -> "Chat response could not be read. Cached messages and your draft are kept; retry."
-                else -> e.message?.take(240) ?: "Chat unavailable. Your draft is kept; retry when online."
-            } }
-            finally { if(owner==account && chatEpoch==epoch) { chatBusy=false;amber.interactive=false;if(!chatVisible)sync() } }
+            try{action(account,epoch,period)}catch(e:CancellationException){throw e}catch(e:Exception){if(owner==account&&chatEpoch==epoch&&selectedChatPeriod==period)chatStatus=when {
+                e.message?.contains("approval needed")==true->"Chat needs Amber permission. Tap Refresh and approve kind30078; remembered permission enables automatic updates."
+                e is java.io.IOException->"Chat is offline or the server is unavailable. This room’s cached messages and draft are kept; retry."
+                e is org.json.JSONException->"Chat response could not be read. This room’s cached messages and draft are kept; retry."
+                else->e.message?.take(240)?:"Chat unavailable. This room’s draft is kept; retry when online."
+            }}finally{if(owner==account&&chatEpoch==epoch){chatBusy=false;amber.interactive=false;if(!chatVisible)sync()}}
         }
     }
-    private fun currentChat(account:String,epoch:Int,period:Long) { check(owner==account && chatEpoch==epoch && Rules.period()==period) { "Account or daily word changed" } }
-    /** Opening/refreshing checks membership only: it never sends guesses or posts. */
-    fun openChat() = chatAction(true) { account,epoch,period ->
-        chatStatus="Checking today’s chat…"
-        val room=chatClient.open(account);currentChat(account,epoch,period)
-        if(room==null) { chatStatus=if(completed())"Validate your completed result to unlock today’s chat, or check an existing server completion." else "Finish today’s puzzle to unlock chat.";return@chatAction }
-        chatRoom?.takeIf{it!==room}?.discard();chatRoom=room
-        chatStatus="";readChat(account,epoch,period,room)
-    }
-    /** Explicit confirmation is required in ChatScreen before this method runs. */
-    fun unlockChat() = chatAction(true) { account,epoch,period ->
-        check(completed()) { "Finish today’s puzzle first" }
-        chatStatus="Checking your completed result…"
-        var room=chatClient.open(account);currentChat(account,epoch,period)
-        if(room==null) {
-            chatStatus="Validating your result with Word5…"
-            chatClient.validateCompletion(account,state.current(),rules);currentChat(account,epoch,period)
-            room=chatClient.open(account);currentChat(account,epoch,period)
+    private fun currentChat(account:String,epoch:Int,period:Long){check(owner==account&&chatEpoch==epoch&&selectedChatPeriod==period&&period in (Rules.period()-1)..Rules.period()){ "Chat account, selection or expiry changed" }}
+    private fun installChatRooms(rooms:List<ChatRoom>) {
+        chatMetadataJob?.cancel()
+        val next=rooms.associate{room->
+            val old=chatViews[room.period]
+            val retained=old?.takeIf{it.room.owner==room.owner&&it.room.key.contentEquals(room.key)}
+            if(old!=null){if(retained==null)chatClient.forget(old.room);old.room.discard()}
+            room.period to (retained?.copy(room=room)?:ChatRoomView(room))
         }
-        check(room!=null) { "Result validation did not unlock chat. Retry checking the room." }
-        chatRoom?.discard();chatRoom=room;chatStatus="";readChat(account,epoch,period,room)
+        chatViews.filterKeys{it !in next}.values.forEach{chatClient.forget(it.room);it.room.discard()}
+        chatViews=next
     }
-    fun refreshChat(interactive:Boolean=true) {
-        if(chatRoom==null) { if(interactive)openChat();return }
-        chatAction(interactive) { account,epoch,period -> readChat(account,epoch,period,chatRoom ?: return@chatAction) }
+    private suspend fun checkedChatRooms(account:String,epoch:Int,period:Long):List<ChatRoom> {
+        val rooms=chatClient.rooms(account)
+        try{currentChat(account,epoch,period);return rooms}catch(e:Exception){rooms.forEach{it.discard()};throw e}
     }
-    fun sendChat() = chatAction(true) { account,epoch,period ->
-        val room=chatRoom ?: error("Finish today’s puzzle to unlock chat")
-        val text=chatDraft;check(text.isNotBlank()) { "Write a message first" }
-        chatStatus="Sending encrypted message…"
-        chatClient.send(account,room,text);currentChat(account,epoch,period)
-        if(chatDraft==text)chatDraft=""
+    /** Membership checks never send guesses, including for yesterday. */
+    fun openChat()=chatAction(true){account,epoch,period->
+        chatStatus="Checking available chats…"
+        val rooms=checkedChatRooms(account,epoch,period);installChatRooms(rooms)
+        val room=chatRoom
+        if(room==null){chatStatus=if(period==Rules.period()-1)"Yesterday’s chat is available if you verified yesterday’s result with Word5. Completing today’s puzzle unlocks today’s room."else if(completed())"Validate today’s completed result to unlock its chat, or check an existing server completion."else"Finish today’s puzzle to unlock its chat. You can still visit yesterday if you completed it.";return@chatAction}
         chatStatus="";readChat(account,epoch,period,room)
     }
-    private suspend fun readChat(account:String,epoch:Int,period:Long,room:ChatRoom) {
+    /** Only today's informed confirmation can submit native ordered guesses. */
+    fun unlockChat()=chatAction(true){account,epoch,period->
+        check(period==Rules.period()&&completed()){ "Only today’s completed game can be newly validated" }
+        val confirmedGame=state.current();check(confirmedGame.period==period)
+        var rooms=checkedChatRooms(account,epoch,period)
+        if(rooms.none{it.period==period}){
+            rooms.forEach{it.discard()};chatStatus="Validating today’s result with Word5…"
+            check(period==Rules.period()&&confirmedGame.period==period){"The new word has started. Open today’s room and confirm validation again."}
+            chatClient.validateCompletion(account,confirmedGame,rules,period);currentChat(account,epoch,period)
+            rooms=checkedChatRooms(account,epoch,period)
+        }
+        installChatRooms(rooms);val room=chatRoom?:error("Result validation did not unlock today’s chat. Retry checking the room.")
+        chatStatus="";readChat(account,epoch,period,room)
+    }
+    fun refreshChat(interactive:Boolean=true){if(chatRoom==null){if(interactive)openChat();return};chatAction(interactive){account,epoch,period->readChat(account,epoch,period,chatRoom?:return@chatAction)}}
+    fun sendChat()=chatAction(true){account,epoch,period->
+        val view=chatViews[period]?:error("This room requires a verified completion")
+        val text=view.draft;check(text.isNotBlank()){ "Write a message first" };chatStatus="Sending encrypted message…"
+        chatClient.send(account,view.room,text);currentChat(account,epoch,period)
+        val latest=chatViews[period];if(latest?.room===view.room&&latest.draft==text)chatViews=chatViews+(period to latest.copy(draft=""))
+        chatStatus="";readChat(account,epoch,period,view.room)
+    }
+    private suspend fun readChat(account:String,epoch:Int,period:Long,room:ChatRoom){
         val rows=chatClient.read(account,room);currentChat(account,epoch,period)
-        if(chatRoom!==room)return
-        chatMessages=rows;chatStatus="";loadChatMembers(account,epoch,room,rows)
+        val old=chatViews[period]?:return;if(old.room!==room)return
+        val outcomes=chatClient.results(account,room)
+        val members=rows.map{it.pubkey}.distinct().associateWith{pubkey->chatRoomMember(chatProfiles[pubkey],old.members[pubkey],outcomes[pubkey].orEmpty())}
+        chatViews=chatViews+(period to old.copy(messages=rows,members=members));chatStatus="";loadChatMembers(account,epoch,room,rows)
     }
-    private fun loadChatMembers(account:String,epoch:Int,room:ChatRoom,rows:List<ChatMessage>) {
-        val missing=rows.map{it.pubkey}.distinct().filter{it !in chatMembers}
-        if(missing.isEmpty() || chatMetadataJob?.isActive==true)return
-        chatMetadataJob=viewModelScope.launch {
+    private fun loadChatMembers(account:String,epoch:Int,room:ChatRoom,rows:List<ChatMessage>){
+        val missing=rows.map{it.pubkey}.distinct().filter{it !in chatProfiles};if(missing.isEmpty()||chatMetadataJob?.isActive==true)return
+        chatMetadataJob=viewModelScope.launch{
             val permits=kotlinx.coroutines.sync.Semaphore(3)
-            missing.forEach { pubkey -> launch {
+            missing.forEach{pubkey->launch{
                 permits.acquire()
-                try {
-                    val profile=async { try { withTimeout(6000){PublicNostr.profile(pubkey)} } catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;null} catch(_:Exception){null} }
-                    val history=async { try { withTimeout(6000){PublicNostr.get("api/player-history?pubkey=$pubkey")} } catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;null} catch(_:Exception){null} }
-                    val member=chatMember(profile.await(),history.await(),pubkey,room.period)
-                    if(owner==account && chatEpoch==epoch && chatRoom===room && room.active(owner,System.currentTimeMillis()))chatMembers=chatMembers+(pubkey to member)
-                } finally { permits.release() }
-            } }
+                try{
+                    val profile=try{withTimeout(6000){PublicNostr.profile(pubkey)}}catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;null}catch(_:Exception){null}
+                    if(owner==account&&chatEpoch==epoch&&chatRoom===room&&room.active(owner,System.currentTimeMillis())){
+                        if(chatProfiles.size>=256)chatProfiles.remove(chatProfiles.keys.first());chatProfiles[pubkey]=profile?:org.json.JSONObject()
+                        val view=chatViews[room.period]?:return@launch
+                        val member=chatRoomMember(profile,null,chatClient.results(account,room)[pubkey].orEmpty())
+                        chatViews=chatViews+(room.period to view.copy(members=view.members+(pubkey to member)))
+                    }
+                }finally{permits.release()}
+            }}
         }
     }
     fun shareText(): String = resultShareText(state,rules)
