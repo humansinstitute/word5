@@ -167,7 +167,7 @@ class CorrectionTest {
         val encoded=Codec.encode(State(baseline=base),owner)
         fun changed(edit:(JSONObject)->Unit):String {val j=JSONObject(encoded);edit(j.getJSONObject("baseline").getJSONObject("correctionAnchor"));return j.toString()}
         rejected { Codec.decode(changed{it.put("streak",1.5)},owner,rules) }
-        rejected { Codec.decode(changed{it.put("maxStreak",6)},owner,rules) }
+        rejected { Codec.decode(changed{it.put("maxStreak",100001)},owner,rules) }
         rejected { Codec.decode(changed{it.put("covered",JSONArray(listOf(day,day)))},owner,rules) }
         rejected { Codec.decode(changed{it.put("covered",JSONArray(listOf(day-1)))},owner,rules) }
         rejected { Codec.decode(changed{it.put("lastPeriod",day-1)},owner,rules) }

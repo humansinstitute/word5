@@ -1,5 +1,7 @@
 # Word5 public relay data and encrypted player sync
 
+
+See [history-reconciliation.md](history-reconciliation.md) for current selection, lifetime baseline and private/public rules.
 ## Public data contract
 
 Word5 uses the server database for calculation and archival state, then distributes signed public results through Nostr. It does not ask consumers to reconstruct a board from a global relay window.
@@ -13,9 +15,9 @@ The server publishes two records:
 | All-time Top Streaks | `word5:streaks:all-time:v1` | `signed-public-history` | Highest accepted player-signed public claim in the complete server archive |
 | Completed daily scores | `word5:daily:<periodId>:v1` | `server-verified` | Verified server completions that the player also chose to post publicly |
 
-Top Streaks rows contain `rank`, `pubkey`, `maxStreak`, the related current claim fields, `sourceEventId`, and any applicable `latestCorrectionEventId`. A historical claim such as Daniel's 114 remains `signed-public-history`; the server signature certifies the snapshot and archive calculation, not that the historical puzzle run was server-verified.
+Top Streaks rows contain `rank`, `pubkey`, `maxStreak`, accepted public current counters, `baselineMaxStreak`, decision provenance, `sourceEventId`, and any applicable `latestCorrectionEventId`. Baseline source fields describe the accepted decision; calculated growth is explicitly reconciled public history. A historical claim such as Daniel's 114 remains `signed-public-history`; the server signature certifies the snapshot and archive calculation, not that the historical puzzle run was server-verified.
 
-Daily rows contain `rank`, `pubkey`, `points`, `result`, `hardMode`, and the player's public `sourceEventId`. Private completion-event IDs and guesses are never included. The daily cutoff is 00:21 UTC after the completed period. A late confirmed public post can create a newer version at the same address. Empty snapshots are valid and let consumers distinguish “no public scores” from unavailable data.
+Daily rows contain `rank`, `pubkey`, `points`, `result`, evidence provenance and the player's public `sourceEventId`, under the shared `word5.calculation.v1` contract. Historical public reports remain distinct from validated completions. Private completion-event IDs and guesses are never included. The daily cutoff is 00:21 UTC after the completed period. A late confirmed public post can create a newer version at the same address. Empty snapshots are valid and let consumers distinguish “no public scores” from unavailable data.
 
 Every snapshot has these tags:
 

@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { NativeBackup, backupRequest, BackupError } from "./native-backup";
 import { DailyChat } from "./chat";
+import { ReconciliationSnapshot, snapshotRequest } from "./reconciliation-snapshot";
+import { CONTRACT, publicBoard } from "./reconciliation";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
 import { VisitAnnouncer } from "./visit-announcements";
@@ -42,6 +44,9 @@ async function catchUpSocialHistory() {
 setTimeout(() => void catchUpSocialHistory(), 1_000);
 setInterval(() => void catchUpSocialHistory(), 15 * 60 * 1000);
 const nativeBackup = service.secretKey ? new NativeBackup(service.db, service.secretKey, (pubkey) => service.playerHistory(pubkey, Date.now(), true)) : null;
+const reconciliationSnapshot = new ReconciliationSnapshot(service.db,
+  (process.env.WORD5_RECONCILIATION_OPERATORS||"").split(",").filter(p=>/^[0-9a-f]{64}$/.test(p)),
+  `${process.env.WORD5_PUBLIC_BASE || "https://otherstuff.ai/word5/"}api/reconciliation/snapshot`,process.env.WORD5_RECONCILIATION_INSTANCE||"");
 const chat = new DailyChat(service);
 // Purge expired room material at its retention deadline even without app traffic.
 setInterval(() => chat.prune(), 1000).unref();
@@ -131,7 +136,7 @@ const server = Bun.serve({
       // Page loads and API access also discard expired rooms for anonymous visitors.
       if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261116-1", scoreRecap: scoreAnnouncer.status(),
+        return json({ ok: true, app: "word5-server", calculationContract:CONTRACT,reconciliationBuild:"20261116-1", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261116-1", scoreRecap: scoreAnnouncer.status(),
           publicData: publicDataPublisher.status(),
           socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
       }
@@ -139,6 +144,12 @@ const server = Bun.serve({
         if (!nativeBackup) return json({error: "Encrypted backup unavailable"}, {status: 503});
         try { return json({ event: await backupRequest(req, nativeBackup, process.env.WORD5_PUBLIC_BASE || "https://otherstuff.ai/word5/") }); }
         catch (error) { return json({ error: error instanceof BackupError ? error.message : "Backup request rejected" }, {status: error instanceof BackupError ? error.status : 400}); }
+      }
+      if(url.pathname==="/api/reconciliation/snapshot" && req.method==="POST") {
+        try {
+          const snapshot=await snapshotRequest(req,reconciliationSnapshot);
+          return new Response(snapshot.bytes,{headers:{'content-type':'application/vnd.sqlite3','cache-control':'no-store','x-word5-sha256':snapshot.sha256,'x-word5-capture-started-at':String(snapshot.captureStartedAt),'x-word5-capture-finished-at':String(snapshot.captureFinishedAt)}});
+        }catch{return json({ok:false,error:'Snapshot unavailable or unauthorized'},{status:403});}
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
@@ -200,7 +211,15 @@ const server = Bun.serve({
         return json(service.socialHistory.history({ authors, since: parseInteger("since"), until: parseInteger("until"), limit: parseInteger("limit") }));
       }
       if (url.pathname === "/api/player-history" && req.method === "GET") {
-        return json(service.playerHistory(url.searchParams.get("pubkey") || ""));
+        return json(service.publicPlayerHistory(url.searchParams.get("pubkey") || ""));
+      }
+      if (url.pathname === "/api/player-history" && req.method === "POST") {
+        return json(service.authenticatedHistory((await readJson(req))?.event));
+      }
+      if (url.pathname === "/api/comparison" && req.method === "GET") {
+        const authors=(url.searchParams.get("authors")||"").split(",").filter(Boolean);
+        if(authors.length>100||authors.some(a=>!/^[0-9a-f]{64}$/.test(a)))throw new Error("Invalid authors");
+        return json(publicBoard(service.db,21,Date.now(),authors));
       }
       if (url.pathname === "/api/top-streaks" && req.method === "GET") {
         const limitText = url.searchParams.get("limit") || "50";

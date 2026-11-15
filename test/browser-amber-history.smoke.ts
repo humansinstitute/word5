@@ -20,7 +20,7 @@ let unavailable = false;
 let historyDelay = 0;
 const server = Bun.serve({ port: 0, async fetch(req) {
   const url = new URL(req.url);
-  if (url.pathname === '/api/player-history') { if (historyDelay) await Bun.sleep(historyDelay); return unavailable ? new Response('{}', { status: 503 }) : Response.json(service.playerHistory(url.searchParams.get('pubkey')!)); }
+  if (url.pathname === '/api/player-history') { if (historyDelay) await Bun.sleep(historyDelay); return unavailable ? new Response('{}', { status: 503 }) : Response.json(req.method==='POST'?service.authenticatedHistory((await req.json()).event):service.publicPlayerHistory(url.searchParams.get('pubkey')!)); }
   if (url.pathname === '/api/completion') {
     try { return Response.json(service.complete((await req.json()).event)); }
     catch (error) { return Response.json({ ok: false, error: String(error) }, { status: 400 }); }
@@ -53,6 +53,14 @@ async function newPhone() {
   await page.waitForFunction(() => (window as any).NostrSession?.getPlayer() && (window as any).Word5App?.recordCompletedScore);
   return { context, page };
 }
+async function approveHistory(page:any,signingKey=secret) {
+  await page.waitForSelector('#amberRequest');
+  const intent=await openAmber(page);
+  const draft=parseAmber(intent).event;
+  check(draft.tags.some((t:string[])=>t[1]==='word5.history-request.v1'),'private history requests explicit owner signature');
+  const signed=finalizeEvent(draft,signingKey);
+  await page.goto(amberReturn(intent,signed.sig,signed));
+}
 async function connect(page: any) {
   await page.evaluate(() => (window as any).AmberSigner.login());
   check(await page.evaluate(() => !localStorage.getItem('word5-amber-pending-v1')), 'login does not launch or persist a request without explicit Open Amber click');
@@ -61,6 +69,7 @@ async function connect(page: any) {
   check(pending.type === 'get_public_key', 'explicit click creates correlated login request');
   await page.goto('about:blank');
   await page.goto(amberReturn(outgoing.get(page)!, pubkey));
+  await approveHistory(page);
   await page.waitForFunction(pk => (window as any).NostrSession?.getPlayer()?.linked_pubkey === pk &&
     JSON.parse(localStorage.getItem('words-game') || '{}').stats?.played === 2, pubkey);
 }
@@ -192,6 +201,7 @@ async function connectCompleted(page: any) {
   const pending = await page.evaluate(() => JSON.parse(localStorage.getItem('word5-amber-pending-v1')!));
   await page.goto('about:blank');
   await page.goto(amberReturn(outgoing.get(page)!, pubkey));
+  await approveHistory(page);
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('words-game') || '{}').serverCompleted === true);
 }
 
@@ -288,6 +298,7 @@ async function manualRecovery() {
   check(await page.evaluate(() => !!localStorage.getItem('word5-amber-pending-v1') && !localStorage.getItem('spiders.nostr.player.v1')?.includes('nsec1-do-not-accept')), 'secret-looking input is rejected without storage or loss of request');
   await page.locator('#amberManualResult').fill(nip19.npubEncode(pubkey));
   await button('Use result').click();
+  await approveHistory(page);
   await page.waitForFunction(pk => (window as any).NostrSession.getPlayer().linked_pubkey === pk && JSON.parse(localStorage.getItem('words-game')!).stats.played === 3, pubkey);
   check(await page.locator('#amberConnected').count(), 'manual npub login validates and restores same-account server history');
   // Another explicit login exercises hex acceptance and manual form restoration.
@@ -343,6 +354,7 @@ async function manualRecovery() {
   await button('Return result manually').click();
   await page.locator('#amberManualResult').fill(completionKey);
   await button('Use result').click();
+  await approveHistory(page,completionSecret);
   await page.waitForFunction(pk => (window as any).NostrSession.getPlayer().linked_pubkey === pk && !((window as any).eval('state.gameOver')), completionKey);
   await page.evaluate(() => (window as any).eval('state.currentGuess = state.targetWord; submitGuess();'));
   await page.waitForSelector('#amberRequest');

@@ -57,7 +57,7 @@ describe('authoritative player history', () => {
     const f = fixture();
     for (const [p, result] of [[21010, '2'], [21011, '2'], [21012, 'X'], [21013, '2'], [21015, '2']] as const)
       f.service.socialHistory.archive(f.publicScore(p, result));
-    expect(f.service.playerHistory(f.pubkey, 21015 * 86400000).stats).toEqual({ played: 5, won: 4, streak: 1, maxStreak: 2 });
+    expect(f.service.playerHistory(f.pubkey, 21015 * 86400000 + 30000).stats).toEqual({ played: 5, won: 4, streak: 1, maxStreak: 2 });
     expect(f.service.playerHistory(f.pubkey, 21017 * 86400000).stats.streak).toBe(0);
     f.service.db.close();
   });
@@ -65,9 +65,9 @@ describe('authoritative player history', () => {
     const f = fixture();
     const correction = (period: number, seconds: number) => finalizeEvent({ kind: 5555, created_at: period * 86400 + seconds,
       tags: [['t', 'word5'], ['schema', 'word5.stats.v1'], ['played', '40'], ['won', '39'], ['streak', '12'], ['maxStreak', '15']], content: '' }, f.secret);
-    f.service.socialHistory.archive(correction(21002, 100)); f.complete(21002, 200);
+    { const e=correction(21002,100);f.service.socialHistory.archive(e);f.service.db.query("INSERT INTO reviewed_correction_anchors(event_id,reason) VALUES(?,'fixture reviewed')").run(e.id); } f.complete(21002, 200);
     expect(f.service.playerHistory(f.pubkey, 21002 * 86400000 + 300000).stats).toEqual({ played: 41, won: 40, streak: 13, maxStreak: 15 });
-    f.service.socialHistory.archive(correction(21002, 250));
+    { const e=correction(21002,250);f.service.socialHistory.archive(e);f.service.db.query("INSERT INTO reviewed_correction_anchors(event_id,reason) VALUES(?,'fixture reviewed')").run(e.id); }
     expect(f.service.playerHistory(f.pubkey, 21002 * 86400000 + 300000).stats).toEqual({ played: 40, won: 39, streak: 12, maxStreak: 15 });
     f.service.db.close();
   });
@@ -76,7 +76,7 @@ describe('authoritative player history', () => {
     f.service.socialHistory.archive(f.publicScore(21010));
     const correction = finalizeEvent({ kind: 5555, created_at: 21010 * 86400 + 100,
       tags: [['t', 'word5'], ['schema', 'word5.stats.v1'], ['played', '40'], ['won', '39'], ['streak', '12'], ['maxStreak', '15']], content: '' }, f.secret);
-    f.service.socialHistory.archive(correction); f.complete(21011); f.complete(21011);
+    f.service.socialHistory.archive(correction); f.service.db.query("INSERT INTO reviewed_correction_anchors(event_id,reason) VALUES(?,'fixture reviewed')").run(correction.id); f.complete(21011); f.complete(21011);
     expect(f.service.playerHistory(f.pubkey, 21011 * 86400000 + 30000).stats).toEqual({ played: 41, won: 40, streak: 13, maxStreak: 15 });
     expect(() => f.service.playerHistory('bad')).toThrow('pubkey');
     f.service.db.close();
@@ -100,7 +100,7 @@ describe('authoritative player history', () => {
     const f = fixture();
     const correction = finalizeEvent({ kind: 5555, created_at: 21000 * 86400 + 100,
       tags: [['t', 'word5'], ['schema', 'word5.stats.v1'], ['played', '0'], ['won', '0'], ['streak', '0'], ['maxStreak', '0']], content: '' }, f.secret);
-    f.service.socialHistory.archive(correction);
+    f.service.socialHistory.archive(correction); f.service.db.query("INSERT INTO reviewed_correction_anchors(event_id,reason) VALUES(?,'fixture reviewed')").run(correction.id);
     f.service.socialHistory.archive(f.publicScore(21002));
     f.service.socialHistory.archive(f.publicScore(21004));
     const now = 21004 * 86400000 + 30000;
@@ -119,12 +119,12 @@ describe('authoritative player history', () => {
     const f = fixture();
     const correction = (seconds: number) => finalizeEvent({ kind: 5555, created_at: 21002 * 86400 + seconds,
       tags: [['t', 'word5'], ['schema', 'word5.stats.v1'], ['played', '40'], ['won', '39'], ['streak', '12'], ['maxStreak', '15']], content: '' }, f.secret);
-    f.service.socialHistory.archive(correction(100));
+    { const e=correction(100);f.service.socialHistory.archive(e);f.service.db.query("INSERT INTO reviewed_correction_anchors(event_id,reason) VALUES(?,'fixture reviewed')").run(e.id); }
     f.complete(21002, 200);
     const before = f.service.playerHistory(f.pubkey, 21002 * 86400000 + 300000, true) as any;
     expect(before.correctionAnchor).toEqual({ streak: 12, maxStreak: 15, lastPeriod: 21001, covered: [] });
     expect(before.stats.streak).toBe(13);
-    f.service.socialHistory.archive(correction(250));
+    { const e=correction(250);f.service.socialHistory.archive(e);f.service.db.query("INSERT INTO reviewed_correction_anchors(event_id,reason) VALUES(?,'fixture reviewed')").run(e.id); }
     const after = f.service.playerHistory(f.pubkey, 21002 * 86400000 + 300000, true) as any;
     expect(after.correctionAnchor).toEqual({ streak: 12, maxStreak: 15, lastPeriod: 21002, covered: [21002] });
     expect(after.stats.streak).toBe(12);

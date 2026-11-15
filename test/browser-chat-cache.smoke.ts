@@ -19,7 +19,7 @@ const built=await Bun.build({entrypoints:[join(root,'node_modules/nostr-tools/li
 let failRooms=false,failReads=false,legacy=false;const reads:any[]=[];
 const server=Bun.serve({port:0,async fetch(req){const url=new URL(req.url);try{
  if(url.pathname.startsWith('/api/chat/')){const action=url.pathname.split('/').at(-1)!;const e=(await req.json()).event;if(action==='read')reads.push(JSON.parse(e.content));if((action==='rooms'&&failRooms)||(action==='read'&&failReads))return Response.json({ok:false,error:'test outage'},{status:503});const result:any=chat.request(e,action);if(legacy&&action==='read'){delete result.reset;delete result.cursor;result.messages=service.db.query('SELECT event FROM chat_messages WHERE period=?1 ORDER BY rowid').all(period).map((x:any)=>JSON.parse(x.event));}return Response.json(result);}
- if(url.pathname==='/api/player-history')return Response.json(service.playerHistory(url.searchParams.get('pubkey')!));
+ if(url.pathname==='/api/player-history')return Response.json(req.method==='POST'?service.authenticatedHistory((await req.json()).event):service.publicPlayerHistory(url.searchParams.get('pubkey')!));
  if(url.pathname.startsWith('/api/'))return Response.json({ok:true,rows:[],games:[]});
  const file=Bun.file(join(root,url.pathname==='/'?'chat.html':url.pathname.slice(1)));return new Response(file,{headers:{'content-type':url.pathname.endsWith('.js')?'text/javascript':url.pathname.endsWith('.html')?'text/html':'text/plain'}});
 }catch(e){return Response.json({ok:false,error:(e as Error).message},{status:400});}}});

@@ -49,6 +49,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
     private var operation = 0L
     private var activePeriod = Rules.period()
     private val backup = Backup(amber, rules)
+    private val completionQueue = CompletionQueue({prefs.getString(it,null)}, {k,v->check(prefs.edit().putString(k,v).commit())}, {check(prefs.edit().remove(it).commit())}, {prefs.all.keys})
     private var chatViews by mutableStateOf<Map<Long,ChatRoomView>>(emptyMap())
     var selectedChatPeriod by mutableLongStateOf(Rules.period());private set
     val chatRooms get()=chatViews.values.map{it.room}.sortedByDescending{it.period}
@@ -123,6 +124,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
         val revealAccount = owner; val revealPeriod = activePeriod
         viewModelScope.launch { delay(1800); if(owner == revealAccount && activePeriod == revealPeriod) revealing = false }
         if(completed()) { viewModelScope.launch { delay(2300); if(owner == revealAccount && activePeriod == revealPeriod) openResult() } }
+        if(owner.isNotEmpty() && rules.completed(state.current())) completionQueue.enqueue(completionDraft(state.current(),rules,owner),state.current().period)
         message = if(completed()) "Today's game is saved." else "Guess saved on this device."
         sync()
     }
@@ -140,6 +142,11 @@ class GameModel(app: Application): AndroidViewModel(app) {
             syncing = true; amber.interactive = interactive
             try {
                 repeat(3) {
+                    // Validation persists independently of optional Nostr posting and encrypted backup.
+                    completionQueue.drain(account,{amber.sign(it)},{event->
+                        ensureActive();check(owner==account && generation==epoch)
+                        PublicNostr.api("api/completion",event)
+                    })
                     val downloaded = backup.fetch(account)
                     ensureActive(); check(owner == account && epoch == generation && operation == token)
                     val wasComplete = completed()
@@ -198,14 +205,14 @@ class GameModel(app: Application): AndroidViewModel(app) {
         check(owner==account)
         state=Corrections.applyCorrection(state,signed,account,rules);save()
         val key="correction-publish-$account";prefs.edit().putString(key,signed.json().toString()).apply()
-        try { PublicNostr.publish(signed);prefs.edit().remove(key).apply();"Stats correction published" }
+        try { PublicNostr.publish(signed);prefs.edit().remove(key).apply();"Correction proposal published · server baseline awaits review" }
         catch(e:CancellationException){throw e}
-        catch(_:Exception){"Stats corrected locally · public post pending; retry in My Profile"}
+        catch(_:Exception){"Local correction proposed · publication pending; accepted server best is preserved"}
     }
     fun retryCorrectionPublication() = publicAction { account ->
         val key="correction-publish-$account";val raw=prefs.getString(key,null)?:error("No correction post is pending")
         val event=Event.parse(org.json.JSONObject(raw));require(event.pubkey==account && event.verified())
-        PublicNostr.publish(event);prefs.edit().remove(key).apply();"Stats correction published"
+        PublicNostr.publish(event);prefs.edit().remove(key).apply();"Correction proposal published · server baseline awaits review"
     }
     fun postResult() = publicAction { account ->
         check(completed()) { "Finish today's game first" }

@@ -64,7 +64,7 @@ fun statistics(state: State, rules: Rules, today: Long = Rules.period()): Stats 
     var streak = base?.streak ?: 0; var best = base?.maxStreak ?: 0; var last = base?.lastPeriod
     val distribution = (base?.distribution ?: List(6) { 0 }).toMutableList()
     state.games.toSortedMap().values.filter { rules.completed(it) }.forEach { game ->
-        if (base == null || game.period !in base.covered) {
+        if (base == null || (game.period !in base.covered && (base.correctionCreated == null || game.period >= base.correctionCreated/86400))) {
             if (rules.won(game)) distribution[(game.outcome ?: game.guesses.size) - 1]++
             played++
             if (rules.won(game)) won++
@@ -83,7 +83,7 @@ fun statistics(state: State, rules: Rules, today: Long = Rules.period()): Stats 
     }
     if (last == null || last < today - 1) streak = 0
     val corrected = correctedStreaks(state, rules, today)
-    return Stats(played, won, corrected?.first ?: streak, corrected?.second ?: best, distribution)
+    return Stats(played, won, corrected?.first ?: streak, maxOf(corrected?.second ?: best,base?.maxStreak ?: 0), distribution)
 }
 /** Server's completed record is immutable. Concurrent unfinished branches use longest then lexical order. */
 fun merge(local: State, remote: State, rules: Rules): State {

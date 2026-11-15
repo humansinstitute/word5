@@ -94,7 +94,9 @@ suspend fun PublicNostr.history(authors:List<String>,since:Long,until:Long):List
         var start=since
         while(start<=until) {
             val end=minOf(until,start+90*86400)
-            val batch=get("api/social-history?authors=${chunk.joinToString(",")}&since=$start&until=$end&limit=2000").optJSONArray("rows")?.objects().orEmpty()
+            val report=get("api/social-history?authors=${chunk.joinToString(",")}&since=$start&until=$end&limit=2000")
+            check(report.optString("contract")=="word5.calculation.v1"){"Server calculation contract unavailable"}
+            val batch=report.optJSONArray("rows")?.objects().orEmpty()
             check(batch.size<2000){"History reached safety limit; narrow the period"};rows+=batch;start=end+1
         }
     }

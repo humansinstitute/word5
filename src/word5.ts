@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { playerReport, initReconciliation, publicBoard } from "./reconciliation";
 import {
   finalizeEvent,
   getEventHash,
@@ -143,10 +144,11 @@ function parseEvent(event: Event): ParsedWord5Event | null {
   );
   if (!hasWord5Tag) return null;
 
-  let puzzle = Number.parseInt(tagValue(event, "puzzle") || "", 10) || 0;
-  if (!puzzle) {
-    const match = event.content.match(/WORD5\s*#(\d+)/i);
-    puzzle = match ? Number.parseInt(match[1]!, 10) : 0;
+  const puzzleTag=tagValue(event,"puzzle");
+  let puzzle=puzzleTag!==null&&/^\d+$/.test(puzzleTag)?Number(puzzleTag):NaN;
+  if(!Number.isSafeInteger(puzzle)) {
+    const match=event.content.match(/WORD5\s*#(\d+)/i);
+    puzzle=match?Number(match[1]):NaN;
   }
 
   let result = (tagValue(event, "result") || "").toUpperCase();
@@ -155,7 +157,7 @@ function parseEvent(event: Event): ParsedWord5Event | null {
     result = match ? match[1]!.toUpperCase() : "";
   }
 
-  if (!puzzle || !Object.prototype.hasOwnProperty.call(SCORE_BY_RESULT, result)) {
+  if (!Number.isSafeInteger(puzzle) || puzzle<0 || !Object.prototype.hasOwnProperty.call(SCORE_BY_RESULT, result)) {
     return null;
   }
 
@@ -286,6 +288,8 @@ function initDb(db: Database): void {
   if (!columns.some((column) => column.name === "verified_completion")) {
     db.exec("ALTER TABLE game_submissions ADD COLUMN verified_completion INTEGER NOT NULL DEFAULT 0");
   }
+  if (!columns.some(column=>column.name==="completion_basis")) db.exec("ALTER TABLE game_submissions ADD COLUMN completion_basis TEXT NOT NULL DEFAULT 'legacy-unclassified'");
+  if (!columns.some(column=>column.name==="observed_at_ms")) db.exec("ALTER TABLE game_submissions ADD COLUMN observed_at_ms INTEGER");
   if (!columns.some((column) => column.name === "public_event_id")) {
     db.exec("ALTER TABLE game_submissions ADD COLUMN public_event_id TEXT");
   }
@@ -456,6 +460,7 @@ export class Word5Service {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     initDb(this.db);
+    initReconciliation(this.db);
     this.socialHistory = new SocialHistory(this.db);
     this.relayOutbox = new RelayOutbox(this.db);
     this.bootstrapResult = this.socialHistory.bootstrap(join(options.rootDir, SOCIAL_HISTORY_SEED));
@@ -507,9 +512,8 @@ export class Word5Service {
     const periodId = game.periodId as number;
     const current = getCurrentPeriodId(now);
     const eventPeriod = getCurrentPeriodId(event.created_at * 1000);
-    const gracePrevious = periodId === current - 1 && now - current * 86_400_000 <= 120_000;
     if (!Number.isSafeInteger(periodId) || periodId !== eventPeriod ||
-        (periodId !== current && !gracePrevious) || event.created_at * 1000 > now + 30_000) {
+        (periodId > current || periodId < 0) || event.created_at * 1000 > now + 30_000) {
       throw new Error("Completion is outside the current puzzle period");
     }
     if (game.puzzle !== periodId % 1000 || game.date !== getDateForPeriod(periodId)) {
@@ -522,100 +526,61 @@ export class Word5Service {
     const target = getWordForPeriod(this.answers, periodId);
     const guesses = game.guesses as string[];
     if (guesses.slice(0, -1).includes(target)) throw new Error("Guesses continue after the answer");
+    if(game.hardMode) {
+      for(let index=1;index<guesses.length;index++)for(const previous of guesses.slice(0,index)) {
+        const remaining=target.split(''),marks=Array(5).fill(0),next=guesses[index]!;
+        for(let j=0;j<5;j++)if(previous[j]===remaining[j]){marks[j]=2;remaining[j]='';}
+        for(let j=0;j<5;j++)if(!marks[j]){const at=remaining.indexOf(previous[j]!);if(at>=0){marks[j]=1;remaining[at]='';}}
+        for(let j=0;j<5;j++)if(marks[j]===2&&next[j]!==previous[j])throw new Error('Hard mode clue mismatch');
+        for(const letter of new Set(previous)) {
+          const required=previous.split('').filter((c,j)=>c===letter&&marks[j]>0).length;
+          if(next.split('').filter(c=>c===letter).length<required)throw new Error('Hard mode clue mismatch');
+        }
+      }
+    }
     const result = guesses.at(-1) === target ? String(guesses.length) : guesses.length === MAX_GUESSES ? "X" : null;
     if (!result || game.result !== result) throw new Error("Completion result mismatch");
     const points = SCORE_BY_RESULT[result]!;
+    const completionBasis=periodId===current?'server-observed-current-period':'validated-offline-client-evidence';
     this.db.transaction(() => {
       this.db.query(`INSERT OR IGNORE INTO raw_events (event_id,pubkey,kind,created_at,event_json) VALUES (?1,?2,?3,?4,?5)`)
         .run(event.id, event.pubkey, event.kind, event.created_at, JSON.stringify(event));
       this.db.query(`INSERT OR IGNORE INTO game_submissions
-        (event_id,pubkey,period_id,puzzle,puzzle_date,result,points,hard_mode,guesses_json,verified_completion)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1)`)
-        .run(event.id, event.pubkey, periodId, game.puzzle as number, game.date as string, result, points, game.hardMode ? 1 : 0, JSON.stringify(guesses));
-      // A pre-upgrade public post may already occupy today's row. Upgrade it only
-      // when the newly validated completion agrees with its recorded outcome.
+        (event_id,pubkey,period_id,puzzle,puzzle_date,result,points,hard_mode,guesses_json,verified_completion,completion_basis,observed_at_ms)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,?11)`)
+        .run(event.id, event.pubkey, periodId, game.puzzle as number, game.date as string, result, points, game.hardMode ? 1 : 0, JSON.stringify(guesses),completionBasis,now);
+      // A validated completion wins over a legacy public row. Raw signed evidence is retained.
       this.db.query(`UPDATE game_submissions SET event_id=?1, points=?2, guesses_json=?3,
-        verified_completion=1, accepted_at=CURRENT_TIMESTAMP
+        verified_completion=1, result=?6, hard_mode=?7, completion_basis=?8, observed_at_ms=?9, accepted_at=CURRENT_TIMESTAMP
         WHERE pubkey=?4 AND period_id=?5 AND verified_completion=0
-        AND result=?6 AND hard_mode=?7`)
-        .run(event.id, points, JSON.stringify(guesses), event.pubkey, periodId, result, game.hardMode ? 1 : 0);
+        `)
+        .run(event.id, points, JSON.stringify(guesses), event.pubkey, periodId, result, game.hardMode ? 1 : 0,completionBasis,now);
     })();
     const row = this.db.query(`SELECT event_id AS eventId, pubkey, period_id AS periodId, result, points,
-      verified_completion AS verifiedCompletion, published_at AS publishedAt FROM game_submissions
+      verified_completion AS verifiedCompletion, completion_basis AS validationBasis, observed_at_ms AS observedAt, published_at AS publishedAt FROM game_submissions
       WHERE pubkey=?1 AND period_id=?2`).get(event.pubkey, periodId) as Record<string, unknown>;
-    if (row.eventId !== event.id) throw new Error("Score already submitted for this player and period");
+    if (row.eventId !== event.id) {
+      const same=this.db.query(`SELECT 1 FROM game_submissions WHERE pubkey=? AND period_id=? AND verified_completion=1 AND result=? AND hard_mode=? AND guesses_json=?`)
+        .get(event.pubkey,periodId,result,game.hardMode?1:0,JSON.stringify(guesses));
+      if(!same)throw new Error("Score already submitted for this player and period");
+    }
     return { ok: true, submission: row };
   }
 
   // Return only the restoration summary. Detailed unpublished completion records stay private.
-  playerHistory(pubkey: string, now = Date.now(), nativeBaseline = false) {
-    if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error("Invalid player pubkey");
-    const current = getCurrentPeriodId(now);
-    const publicRows = this.db.query(`SELECT event_id AS eventId,event_type AS eventType,
-      period_id AS periodId,puzzle,result,created_at AS createdAt,played,won,streak,max_streak AS maxStreak
-      FROM public_score_history WHERE pubkey=?1 ORDER BY created_at,event_id`).all(pubkey) as any[];
-    const verified = this.db.query(`SELECT g.event_id AS eventId,g.period_id AS periodId,g.result,r.created_at AS createdAt
-      FROM game_submissions g JOIN raw_events r ON r.event_id=g.event_id
-      WHERE g.pubkey=?1 AND g.verified_completion=1 ORDER BY g.period_id`).all(pubkey) as any[];
-    const byPeriod = new Map<number, any>();
-    for (const row of publicRows.filter(row => row.eventType === "score")) {
-      const postedPeriod = Math.floor(row.createdAt / 86400);
-      const periodId = row.periodId ?? postedPeriod - ((postedPeriod % 1000 - (row.puzzle % 1000) + 1000) % 1000);
-      if (!Number.isSafeInteger(periodId) || periodId < 0 || periodId > current) continue;
-      // Public duplicate formats never create extra games. Prefer kind-independent stable ordering.
-      if (!byPeriod.has(periodId)) byPeriod.set(periodId, { ...row, periodId, source: "signed-public-history" });
-    }
-    for (const row of verified) {
-      if (row.periodId <= current) byPeriod.set(row.periodId, { ...row, source: "server-verified" });
-    }
-    const rows = [...byPeriod.values()].sort((a, b) => a.periodId - b.periodId);
-    const correction = publicRows.filter(row => row.eventType === "correction" && row.createdAt * 1000 <= now).at(-1);
-    const stats = correction ? { played: correction.played, won: correction.won,
-      streak: correction.streak, maxStreak: correction.maxStreak } : { played: 0, won: 0, streak: 0, maxStreak: 0 };
-    let lastPeriodId: number | null = null;
-    const baselinePeriods = new Set<number>();
-    if (correction) {
-      for (const row of publicRows.filter(row => row.eventType === "score" && row.createdAt <= correction.createdAt)) {
-        const posted = Math.floor(row.createdAt / 86400);
-        baselinePeriods.add(row.periodId ?? posted - ((posted % 1000 - (row.puzzle % 1000) + 1000) % 1000));
-      }
-      for (const row of verified) if (row.createdAt <= correction.createdAt) baselinePeriods.add(row.periodId);
-      const correctionPeriod = Math.floor(correction.createdAt / 86400);
-      const laterSameDay = rows.some(row => row.periodId === correctionPeriod && row.createdAt > correction.createdAt);
-      lastPeriodId = baselinePeriods.size ? Math.max(...baselinePeriods) : correctionPeriod - (laterSameDay ? 1 : 0);
-    }
-    // Native clients merge private outcomes with the server timeline. Preserve
-    // the original correction seed so interleaved games replay from that point,
-    // rather than starting from counters already advanced by public games.
-    const correctionAnchor = correction ? {
-      streak: correction.streak,
-      maxStreak: correction.maxStreak,
-      lastPeriod: lastPeriodId,
-      covered: baselinePeriods.has(Math.floor(correction.createdAt / 86400))
-        ? [Math.floor(correction.createdAt / 86400)] : [],
-    } : null;
-    for (const row of rows) {
-      if (correction && (baselinePeriods.has(row.periodId) || row.createdAt <= correction.createdAt)) continue;
-      stats.played++;
-      if (row.result !== "X") {
-        stats.won++;
-        stats.streak = lastPeriodId !== null && row.periodId === lastPeriodId + 1 ? stats.streak + 1 : 1;
-        stats.maxStreak = Math.max(stats.maxStreak, stats.streak);
-      } else stats.streak = 0;
-      lastPeriodId = row.periodId;
-    }
-    if (lastPeriodId === null || current - lastPeriodId > 1) stats.streak = 0;
-    return { ok: true, pubkey, periodId: current, stats, lastPeriodId,
-      lastPuzzle: lastPeriodId === null ? null : lastPeriodId % 1000,
-      completed: byPeriod.has(current), currentResult: byPeriod.get(current)?.result ?? null,
-      ...(nativeBaseline ? {
-        correctionCreatedAt: correction?.createdAt ?? null,
-        correctionAnchor,
-        outcomes: rows.map(row => [row.periodId, row.result === "X" ? 7 : Number(row.result)]),
-        coveredPeriods: [...new Set([...rows.map(row => row.periodId), ...baselinePeriods])].sort((a,b) => a-b),
-        distribution: [1,2,3,4,5,6].map(attempt => rows.filter(row => row.result === String(attempt)).length),
-      } : {}),
-      basis: "server-archive", correctionEventId: correction?.eventId ?? null, historyCount: rows.length };
+  playerHistory(pubkey: string, now = Date.now(), nativeBaseline = false, publicOnly = false) {
+    return playerReport(this.db,pubkey,now,nativeBaseline,publicOnly);
+  }
+
+  publicPlayerHistory(pubkey: string, now=Date.now()) {
+    // Public summary uses the same replay while excluding unpublished validation.
+    return { ...this.playerHistory(pubkey, now, false, true), visibility: "public-only" };
+  }
+
+  authenticatedHistory(event:Event,now=Date.now()) {
+    if(!event||!verifyEvent(event)||getEventHash(event)!==event.id||event.kind!==30078||
+      tagValue(event,"schema")!=="word5.history-request.v1"||event.content!==""||Math.abs(event.created_at-Math.floor(now/1000))>300)throw new Error("Invalid history authorization");
+    return {...this.playerHistory(event.pubkey,now,true),visibility:"owner-only"};
   }
 
   completionStatus(event: Event, now = Date.now()) {
@@ -673,7 +638,7 @@ export class Word5Service {
     let attestation: Event | null = null;
     if (this.secretKey) {
       const date = getDateForPeriod(periodId);
-      const signedStats = parseSignedStats(event);
+      const signedStats = this.playerHistory(event.pubkey).stats;
       attestation = buildAttestation({ event, parsed, periodId, date, secretKey: this.secretKey });
       const repost = parsed.result !== "X" ? buildRepost(event, this.secretKey) : null;
       const gamestr = buildGamestrScore({ event, parsed, periodId, date,
@@ -702,15 +667,7 @@ export class Word5Service {
   }
 
   scores(days: 1 | 7 | 21 = 7, publishedOnly = false, limit = 50, now = Date.now()) {
-    const current = getCurrentPeriodId(now);
-    const rows = this.db.query(`SELECT pubkey, COUNT(*) AS games, SUM(points) AS points,
-      SUM(CASE WHEN result!='X' THEN 1 ELSE 0 END) AS wins,
-      SUM(CASE WHEN published_at IS NOT NULL THEN 1 ELSE 0 END) AS publishedGames
-      FROM game_submissions WHERE verified_completion=1 AND period_id BETWEEN ?1 AND ?2
-      AND (?3=0 OR published_at IS NOT NULL)
-      GROUP BY pubkey ORDER BY points DESC, wins DESC, games DESC, pubkey ASC LIMIT ?4`)
-      .all(current - days + 1, current, publishedOnly ? 1 : 0, Math.max(1, Math.min(200, limit)));
-    return { days, publishedOnly, rows };
+    return { ...publicBoard(this.db,days,now), publishedOnly:true, requestedPublishedOnly:publishedOnly, rows:publicBoard(this.db,days,now).rows.slice(0,Math.max(1,Math.min(200,limit))) };
   }
 
   validateSubmission(body: SubmitBody): {
@@ -861,19 +818,6 @@ export class Word5Service {
   }
 
   leaderboard(limit = 50) {
-    const rows = this.db
-      .query(
-        `
-        SELECT pubkey, COUNT(*) AS games, SUM(points) AS points,
-               SUM(CASE WHEN result != 'X' THEN 1 ELSE 0 END) AS wins,
-               MAX(accepted_at) AS lastAcceptedAt
-        FROM game_submissions
-        GROUP BY pubkey
-        ORDER BY points DESC, wins DESC, games DESC, lastAcceptedAt ASC
-        LIMIT ?1
-      `,
-      )
-      .all(Math.max(1, Math.min(200, limit)));
-    return { rows };
+    return {...publicBoard(this.db,100000),rows:publicBoard(this.db,100000).rows.slice(0,Math.max(1,Math.min(200,limit)))};
   }
 }
