@@ -22,7 +22,11 @@ for(let i=0;i<keys.length;i++){
 const built=await Bun.build({entrypoints:[join(root,'node_modules/nostr-tools/lib/esm/index.js')],target:'browser',format:'esm'});if(!built.success)throw new Error('Bundle failed');const bundle=await built.outputs[0].text();
 const server=Bun.serve({port:0,async fetch(req,server){const url=new URL(req.url);if(url.pathname==='/relay'&&server.upgrade(req))return;
  try{
- if(url.pathname.startsWith('/api/chat/'))return Response.json(chat.request((await req.json()).event,url.pathname.split('/').at(-1)!));
+ if(url.pathname.startsWith('/api/chat/')){
+  const action=url.pathname.split('/').at(-1)!,result:any=chat.request((await req.json()).event,action);
+  if(action==='read'){result.results[pks[3]]={period:period-1,won:true,attempts:2};result.results[pks[4]]={period,won:false,attempts:1};}
+  return Response.json(result);
+ }
  if(url.pathname==='/api/player-history'){
   const pk=url.searchParams.get('pubkey')!;historyRequests.set(pk,(historyRequests.get(pk)||0)+1);
   if(lateHistory)await Bun.sleep(1600);
@@ -78,12 +82,12 @@ try{
  check(await message(2).locator('img').count()===0&&await message(2).locator('.message-avatar').textContent()==='BP','broken photo preserves profile initials fallback');
  check(await message(3).locator('.message-name').textContent()==='<img src=x onerror=alert(1)>'&&await message(3).locator('img').count()===0,'malicious-looking name is text and javascript avatar is rejected');
  check(await message(4).locator('img').count()===0,'data avatar URL rejected');
- check(await message(3).locator('.message-result').textContent()===''&&await message(4).locator('.message-result').textContent()==='','wrong-date and invalid outcomes omitted');
+ check(await message(3).locator('.message-result').textContent()===''&&await message(4).locator('.message-result').textContent()==='','wrong-date and malformed authenticated loss outcomes omitted');
  check(await message(5).locator('.message-name').textContent()===`${pks[5].slice(0,6)}…${pks[5].slice(-4)}`,'missing profile uses stable public-key fallback');
  check(await message(6).locator('.message-name').textContent()!== 'Forged identity','invalid signed profile rejected');
  check(await page.locator('#chatHistory').evaluate(el=>el.scrollTop)===position,'asynchronous metadata does not jump reader scroll');
  await page.locator('#chatRefresh').click();await message(0).locator('.message-name').getByText('Pete Winn',{exact:true}).waitFor();
- check([...historyRequests.values()].every(count=>count===1)&&[...profileRequests.values()].every(count=>count===1),'sender metadata deduplicates across messages/reads and shared own profile UI');
+ check(historyRequests.size===0&&[...profileRequests.values()].every(count=>count===1),'sender metadata deduplicates across messages/reads and shared own profile UI');
 
  await page.setViewportSize({width:320,height:667});await page.waitForTimeout(100);
  check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'320px sender headers/photos/results stay within viewport');
@@ -102,12 +106,13 @@ try{
  await ownNode.locator('.message-result').getByText('1/6',{exact:true}).waitFor();
  check(await ownNode.locator('.message-name').textContent()==='You'&&await ownNode.locator('.message-own').isHidden(),'missing own profile displays a single You fallback');
  await ownFallback.context.close();
+ profiles.set(pks[0],[metadata(0,{picture:`${server.url}avatar.svg`})]);const photoOnly=await newContext();await photoOnly.page.goto(`${server.url}chat.html`);const photoNode=photoOnly.page.locator(`[data-sender-pubkey="${pks[0]}"]`);await photoNode.locator('img').waitFor();await photoOnly.page.evaluate(()=>(window as any).Word5Chat.refresh());await photoOnly.page.evaluate(()=>(window as any).Word5Chat.refresh());check(await photoNode.locator('img').count()===1,'photo-only profiles remain idempotent across repeated reads');await photoOnly.context.close();profiles.delete(pks[0]);
  // Slow results must not repopulate a room after daily rollover or an account switch.
  for(const mode of ['rollover','identity']){
   lateProfile=true;lateHistory=true;
   const {context,page}=await newContext();await page.goto(`${server.url}chat.html`);
   await page.locator('#chatMessages .message-bubble').first().waitFor();
-  if(mode==='rollover')await page.evaluate(()=>{const now=Date.now;Date.now=()=>(Math.floor(now()/86400000)+1)*86400000;window.dispatchEvent(new Event('focus'));});
+  if(mode==='rollover')await page.evaluate(()=>{const now=Date.now;Date.now=()=>(Math.floor(now()/86400000)+2)*86400000;window.dispatchEvent(new Event('focus'));});
   else await page.evaluate(()=>(window as any).NostrSession.updatePlayer({auth_mode:'session',linked_pubkey:null,privkey:null}));
   await page.waitForTimeout(2300);
   check(await page.locator('#chatMessages').evaluate(el=>el.children.length)===0,`delayed sender metadata cannot return after ${mode}`);

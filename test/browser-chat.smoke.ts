@@ -50,7 +50,7 @@ try {
   await page.locator('#chatText').fill(text);await page.locator('#chatSend').click();
   await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
   if(await page.locator('#chatMessages img').count()) throw new Error('Unsafe rendering');
-  if(!(await page.locator('#chatExpiry').textContent())?.includes('Closes in')) throw new Error('Countdown missing');
+  if(!(await page.locator('#chatExpiry').textContent())?.includes('Available today and tomorrow')) throw new Error('Countdown missing');
   await page.reload();await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
   if(!loss) {
    const otherSecret=generateSecretKey(),otherPublic=getPublicKey(otherSecret);
@@ -83,7 +83,7 @@ try {
     (window as any).NostrSession.updatePlayer({auth_mode:'amber',linked_pubkey:pk});
    },pk);
    await page.locator('#chatMessages').getByText(text,{exact:true}).waitFor();
-   await page.waitForFunction(()=>(window as any).amberChatSigns>=2&&!sessionStorage.getItem('word5-chat-pending-v1'));
+   await page.waitForFunction(()=>(window as any).amberChatSigns>=2&&!Object.keys(sessionStorage).some(key=>key.startsWith('word5-chat-pending:')));
    const before=await page.evaluate(()=>(window as any).amberChatSigns);
    await page.waitForTimeout(10500);
    if(await page.evaluate(()=>(window as any).amberChatSigns)!==before) throw new Error('Amber received unsolicited polling request');
@@ -91,7 +91,7 @@ try {
    await page.waitForFunction(before=>(window as any).amberChatSigns>before,before);
    console.log('Amber room access and explicit refresh passed; no background signer prompts');
   }
-  await page.evaluate(()=>{ const originalNow=Date.now; Date.now=()=> (Math.floor(originalNow()/86400000)+1)*86400000; });
+  await page.evaluate(()=>{ const originalNow=Date.now; Date.now=()=> (Math.floor(originalNow()/86400000)+2)*86400000; });
   await page.waitForFunction(()=>document.getElementById('chatMessages')?.children.length===0 && Object.keys(sessionStorage).filter(key=>key.startsWith('word5-chat:')).every(key=>JSON.parse(sessionStorage.getItem(key)!).length===0));
   await page.evaluate(()=>{(window as any).NostrSession.updatePlayer({auth_mode:'session',imported_at:null,linked_pubkey:null,privkey:null});});
   await page.waitForFunction(()=>document.getElementById('chatMessages')?.children.length===0 && !Object.keys(sessionStorage).some(key=>key.startsWith('word5-chat:')));

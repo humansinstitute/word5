@@ -17,22 +17,25 @@
       return new TextDecoder('utf-8', {fatal:true}).decode(bytes);
     },
     prune(storage, identity, now = Date.now()) {
-      const prefix = 'word5-chat:';
-      for (let i=storage.length-1;i>=0;i--) {
-        const name = storage.key(i);
-        if (name?.startsWith('word5-chat-messages:')) {
+      const current=Math.floor(now/86400000);
+      const validPeriod=p=>Number.isSafeInteger(p)&&(p===current||p===current-1);
+      for(let i=storage.length-1;i>=0;i--) {
+        const name=storage.key(i);
+        if(name?.startsWith('word5-chat-messages:')) {
           try {
             const value=JSON.parse(storage.getItem(name));
-            if (!identity||name!==`word5-chat-messages:${identity}`||!Number.isSafeInteger(value?.period)||value.period!==Math.floor(now/86400000)||value.expiresAt!==(value.period+1)*86400000||!Array.isArray(value.events)||value.events.length>200) storage.removeItem(name);
+            if(!identity||name!==`word5-chat-messages:${identity}:${value?.period}`||!validPeriod(value?.period)||value.expiresAt!==(value.period+2)*86400000||!Array.isArray(value.events)||value.events.length>200)storage.removeItem(name);
           } catch { storage.removeItem(name); }
-          continue;
-        }
-        if (!name?.startsWith(prefix)) continue;
-        try {
-          const value = JSON.parse(storage.getItem(name));
-          if (!identity || name !== `${prefix}${identity}` || !Array.isArray(value)) { storage.removeItem(name); continue; }
-          storage.setItem(name, JSON.stringify(value.filter(room => Number.isSafeInteger(room.period) && room.expiresAt === (room.period+1)*86400000 && room.expiresAt>now)));
-        } catch { storage.removeItem(name); }
+        } else if(name?.startsWith('word5-chat:')) {
+          try {
+            const value=JSON.parse(storage.getItem(name));
+            if(!identity||name!==`word5-chat:${identity}`||!Array.isArray(value)){storage.removeItem(name);continue;}
+            storage.setItem(name,JSON.stringify(value.filter(room=>validPeriod(room.period)&&room.expiresAt===(room.period+2)*86400000&&room.expiresAt>now)));
+          } catch {storage.removeItem(name);}
+        } else if(name?.startsWith('word5-chat-pending:')) {
+          try { const value=JSON.parse(storage.getItem(name));if(!identity||value.pubkey!==identity||!validPeriod(value.period)||name!==`word5-chat-pending:${identity}:${value.period}`)storage.removeItem(name); }
+          catch {storage.removeItem(name);}
+        } else if(name?.startsWith('word5-chat-selection:')&&(!identity||name!==`word5-chat-selection:${identity}`))storage.removeItem(name);
       }
     }
   };

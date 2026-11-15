@@ -39,6 +39,9 @@
     .room-icon { width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:#a855f71a;color:#d8b4fe;font-size:24px; }
     h1 { margin:0;font-size:21px;letter-spacing:-.03em; }
     .room-subtitle { margin:5px 0 0;color:#a9a2b0;font-size:13px; }
+    .room-days { display:flex;gap:8px;margin-top:16px; }
+    .room-days button { flex:1;min-width:0;padding:9px 10px;background:#242128;color:#c8bed0;border:1px solid #42394b;border-radius:10px;font:inherit;font-size:12px;cursor:pointer; }
+    .room-days button[aria-pressed=true] { border-color:#a855f7;background:#48245e;color:#fff; }
     .room-controls { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px; }
     #chatRoom { overflow-wrap:anywhere; }
     #chatRefresh { width:auto;padding:8px 12px;border:1px solid #53445f;border-radius:9px;background:#292330;color:#e4dcea;font:inherit;font-size:12px;cursor:pointer; }
@@ -78,7 +81,10 @@
     @media (max-width:600px) {
       .chat-shell { margin:0;border:0;border-radius:0; }
       .room-header { padding:16px; }
-      .room-controls { margin-top:14px;gap:8px; }
+      .room-days { display:flex;gap:8px;margin-top:16px; }
+    .room-days button { flex:1;min-width:0;padding:9px 10px;background:#242128;color:#c8bed0;border:1px solid #42394b;border-radius:10px;font:inherit;font-size:12px;cursor:pointer; }
+    .room-days button[aria-pressed=true] { border-color:#a855f7;background:#48245e;color:#fff; }
+    .room-controls { margin-top:14px;gap:8px; }
       #chatRoom { font-size:18px; }
       #chatExpiry { font-size:11px; }
       .chat-history { padding:20px 12px; }
@@ -106,7 +112,7 @@
         <button id="keysNewPlayerBtn" class="nostr-btn">New Player</button>
         <button id="checkStreakBtn" class="nostr-btn" style="background:#9333ea;margin-top:8px;">Check my streak</button>
         <button id="menuDonateBtn" class="nostr-btn" style="background:#f97316;margin-top:4px;">Donate ⚡</button>
-        <div class="app-version">Daily chat · 20261115-3</div>
+        <div class="app-version">Daily chat · 20261116-1</div>
       </div>
     </div>
     <div class="title">WORD5</div>
@@ -121,6 +127,7 @@
   <main class="chat-shell" aria-label="Daily group chat">
     <header class="room-header">
       <div class="room-heading"><div class="room-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 10h10M7 14h6"/></svg></div><div><h1 id="chatRoom">Daily chat</h1><p class="room-subtitle">Puzzle finished. Spoilers welcome.</p></div></div>
+      <nav class="room-days" aria-label="Chat day"><button id="chatToday" type="button" aria-pressed="true">Today’s chat</button><button id="chatYesterday" type="button" aria-pressed="false">See yesterday’s chat</button></nav>
       <div class="room-controls"><button id="chatRefresh" type="button">Refresh messages</button><p id="chatExpiry" aria-live="off"></p></div>
     </header>
     <section id="chatHistory" class="chat-history" aria-label="Conversation" tabindex="0">
@@ -131,15 +138,15 @@
     <div class="composer-area">
       <p id="chatStatus" role="status"></p>
       <form id="chatForm"><label for="chatText" class="sr-only">Message</label><textarea id="chatText" maxlength="2000" required class="nostr-input" rows="1" placeholder="Message the group…"></textarea><button id="chatSend" type="submit" aria-label="Send message" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14"/></svg></button></form>
-      <p class="composer-note">Encrypted group chat · closes when the next word begins</p>
+      <p class="composer-note">Encrypted group chat · today and yesterday only</p>
     </div>
   </main>
   <!-- Load nostr modules -->
   <script src="js/amber-signer.js?v=20261111-1"></script>
   <script src="js/nostr-session.js?v=20261111-1"></script>
   <script src="js/nostr-signers.js?v=20261111-1"></script>
-  <script src="js/nostr-ui.js?v=20261115-3"></script>
-  <script src="js/chat-crypto.js?v=20261115-3"></script>
-  <script src="js/daily-chat.js?v=20261115-3"></script>
+  <script src="js/nostr-ui.js?v=20261116-1"></script>
+  <script src="js/chat-crypto.js?v=20261116-1"></script>
+  <script src="js/daily-chat.js?v=20261116-1"></script>
 </body>
 </html>

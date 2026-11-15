@@ -43,7 +43,7 @@ setTimeout(() => void catchUpSocialHistory(), 1_000);
 setInterval(() => void catchUpSocialHistory(), 15 * 60 * 1000);
 const nativeBackup = service.secretKey ? new NativeBackup(service.db, service.secretKey, (pubkey) => service.playerHistory(pubkey, Date.now(), true)) : null;
 const chat = new DailyChat(service);
-// Remove the previous room even when nobody opens the app at rollover.
+// Purge expired room material at its retention deadline even without app traffic.
 setInterval(() => chat.prune(), 1000).unref();
 const visits = new VisitTracker(service.db, process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"));
 const scoreAnnouncer = new ScoreAnnouncer(service.db, service.secretKey, RELAYS);
@@ -131,7 +131,7 @@ const server = Bun.serve({
       // Page loads and API access also discard expired rooms for anonymous visitors.
       if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261115-3", scoreRecap: scoreAnnouncer.status(),
+        return json({ ok: true, app: "word5-server", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261116-1", scoreRecap: scoreAnnouncer.status(),
           publicData: publicDataPublisher.status(),
           socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
       }

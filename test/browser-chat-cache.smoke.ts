@@ -62,10 +62,10 @@ try{
  const other=generateSecretKey(),otherPk=getPublicKey(other);signingKey=other;
  await page.evaluate(pk=>{(window as any).nostr.getPublicKey=async()=>pk;(window as any).NostrSession.updatePlayer({auth_mode:'nip07',linked_pubkey:pk,pubkey:pk});},otherPk);
  await page.waitForFunction(()=>document.querySelector('#chatMessages')?.children.length===0);
- check(!await page.evaluate(pk=>Object.keys(sessionStorage).some(k=>k===`word5-chat-messages:${pk}`),pk),'account switch removes previous identity cache');
+ check(!await page.evaluate(pk=>Object.keys(sessionStorage).some(k=>k.startsWith(`word5-chat-messages:${pk}:`)),pk),'account switch removes previous identity cache');
  signingKey=sk;await page.evaluate(pk=>{(window as any).nostr.getPublicKey=async()=>pk;(window as any).NostrSession.updatePlayer({auth_mode:'nip07',linked_pubkey:pk,pubkey:pk});},pk);
  await page.locator('#chatMessages').getByText('cached one',{exact:true}).waitFor();
  await page.locator('#chatText').fill('expires with room');
- await page.evaluate(()=>{const old=Date.now;Date.now=()=> (Math.floor(old()/86400000)+1)*86400000;});await page.waitForFunction(()=>document.querySelector('#chatMessages')?.children.length===0&&!Object.keys(sessionStorage).some(k=>k.startsWith('word5-chat-messages:')));check(await page.locator('#chatText').inputValue()==='','rollover clears ciphertext cache, visible messages and draft');
+ await page.evaluate(()=>{const old=Date.now;Date.now=()=> (Math.floor(old()/86400000)+2)*86400000;});await page.waitForFunction(()=>document.querySelector('#chatMessages')?.children.length===0&&!Object.keys(sessionStorage).some(k=>k.startsWith('word5-chat-messages:')));check(await page.locator('#chatText').inputValue()==='','rollover clears ciphertext cache, visible messages and draft');
  check(errors.length===0,`zero browser errors ${errors.join('; ')}`);await context.close();
 }finally{await browser.close();server.stop(true);service.db.close();rmSync(dir,{recursive:true,force:true});}

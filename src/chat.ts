@@ -14,8 +14,8 @@ export class DailyChat {
   prune(now = Date.now()) {
     const db = this.service.db;
     db.transaction(() => {
-      db.query('DELETE FROM chat_messages WHERE period<>?1').run(getCurrentPeriodId(now));
-      db.query('DELETE FROM chat_rooms WHERE period<>?1').run(getCurrentPeriodId(now));
+      db.query('DELETE FROM chat_messages WHERE (period+1)*?1+?2<=?3').run(PERIOD_MS,25*60*60*1000,now);
+      db.query('DELETE FROM chat_rooms WHERE (period+1)*?1+?2<=?3').run(PERIOD_MS,25*60*60*1000,now);
       db.query('DELETE FROM chat_requests WHERE received <= ?1').run(now - 120_000);
     })();
   }
@@ -40,15 +40,17 @@ export class DailyChat {
     db.query('INSERT INTO chat_requests VALUES (?1,?2,?3)').run(event.id, event.pubkey, now);
     const current = getCurrentPeriodId(now);
     const eligible = (period: number) => {
-      if (!Number.isSafeInteger(period) || period !== current) throw new Error('Room expired or unavailable');
+      if (!Number.isSafeInteger(period) || (period !== current && period !== current-1)) throw new Error('Room expired or unavailable');
       if (!db.query('SELECT 1 FROM game_submissions WHERE pubkey=?1 AND period_id=?2 AND verified_completion=1').get(event.pubkey, period)) throw new Error('Finish this puzzle to unlock chat');
     };
     if (action === 'rooms') {
-      const rows = db.query('SELECT period_id AS period FROM game_submissions WHERE pubkey=?1 AND verified_completion=1 AND period_id=?2').all(event.pubkey, current) as {period:number}[];
+      if (body.includePrevious !== undefined && typeof body.includePrevious !== 'boolean') throw new Error('Invalid room option');
+      const extended = body.includePrevious === true;
+      const rows = db.query('SELECT period_id AS period FROM game_submissions WHERE pubkey=?1 AND verified_completion=1 AND period_id BETWEEN ?2 AND ?3 ORDER BY period_id DESC').all(event.pubkey,extended ? current-1 : current,current) as {period:number}[];
       const rooms = db.transaction(() => rows.map(({period}) => {
         db.query('INSERT OR IGNORE INTO chat_rooms VALUES (?1,?2)').run(period, randomBytes(32).toString('base64'));
         const room = db.query('SELECT key FROM chat_rooms WHERE period=?1').get(period) as {key:string};
-        return {period, date:getDateForPeriod(period), word:getWordForPeriod(this.service.answers,period), expiresAt:(period+1)*PERIOD_MS, key:room.key};
+        return {period, date:getDateForPeriod(period), word:getWordForPeriod(this.service.answers,period), expiresAt:(period+(extended?2:1))*PERIOD_MS, key:room.key};
       }))();
       return {ok:true, rooms, now};
     }
@@ -63,7 +65,12 @@ export class DailyChat {
         ? (db.query('SELECT id,event FROM chat_messages WHERE period=?1 ORDER BY rowid DESC LIMIT 200').all(body.period) as {id:string,event:string}[]).reverse()
         : db.query('SELECT id,event FROM chat_messages WHERE period=?1 AND rowid>?2 ORDER BY rowid LIMIT 200').all(body.period,anchor.position) as {id:string,event:string}[];
       const newest = db.query('SELECT id FROM chat_messages WHERE period=?1 ORDER BY rowid DESC LIMIT 1').get(body.period) as {id:string}|null;
-      return {ok:true, messages:rows.map(row=>JSON.parse(row.event)), cursor:newest?.id ?? null, reset, now};
+      // Results belong to the selected room. This authenticated response never
+      // substitutes today's public history for yesterday's verified outcome.
+      const outcomes=db.query(`SELECT g.pubkey,g.result FROM game_submissions g WHERE g.period_id=?1 AND g.verified_completion=1
+        AND g.pubkey IN (SELECT DISTINCT pubkey FROM chat_messages WHERE period=?1)`).all(body.period) as {pubkey:string,result:string}[];
+      const results=Object.fromEntries(outcomes.filter(row=>/^[1-6X]$/.test(row.result)).map(row=>[row.pubkey,{period:body.period,won:row.result!=='X',attempts:row.result==='X'?6:Number(row.result)}]));
+      return {ok:true, messages:rows.map(row=>JSON.parse(row.event)), cursor:newest?.id ?? null, reset, results, now};
     }
     if (Object.keys(body).sort().join(',') !== 'action,ciphertext,iv,nonce,period' ||
         typeof body.iv !== 'string' || !/^[A-Za-z0-9+/]{16}$/.test(body.iv) ||

@@ -46,16 +46,23 @@ test('encrypted roundtrip retains signed ciphertext only, rejects tampering, wro
  for(let i=0;i<35;i++) {try {chat.request(event(sk),'rooms',now);}catch {}}
  expect(()=>chat.request(event(sk),'rooms',now)).toThrow('rate');await expect(cryptoUI.encrypt('x'.repeat(2001),room.key,period,pubkey,nonce)).rejects.toThrow();
 });
-test('exact UTC next-word expiry prunes keys/messages on access and startup, no recreation through retained completions',async()=>{
+test('legacy listing closes at rollover; extended access ends after yesterday and physical data purges25h after puzzle end',async()=>{
  const {service,chat}=fixture(),sk=generateSecretKey();finish(service,sk);const room=rooms(chat,sk)[0];const nonce=randomBytes(16).toString('hex');const payload=await cryptoUI.encrypt('hello',room.key,period,getPublicKey(sk),nonce);chat.request(event(sk,'send',{period,nonce,...payload}),'send',now);
- const expiry=(period+1)*PERIOD_MS;expect(rooms(chat,sk,expiry-1)).toHaveLength(1);expect(rooms(chat,sk,expiry)).toEqual([]);
- expect(()=>chat.request(event(sk,'read',{period},expiry),'read',expiry)).toThrow('expired');expect(()=>chat.request(event(sk,'send',{period,...payload},expiry),'send',expiry)).toThrow('expired');
+ const rollover=(period+1)*PERIOD_MS,accessEnd=(period+2)*PERIOD_MS,purgeAt=rollover+25*60*60*1000;
+ expect(rooms(chat,sk,rollover-1)).toHaveLength(1);expect(rooms(chat,sk,rollover)).toEqual([]);
+ const previous=(chat.request(event(sk,'rooms',{includePrevious:true},rollover),'rooms',rollover) as any).rooms;
+ expect(previous).toHaveLength(1);expect(previous[0].key).toBe(room.key);expect(previous[0].expiresAt).toBe(accessEnd);
+ expect((chat.request(event(sk,'read',{period},accessEnd-1),'read',accessEnd-1) as any).messages).toHaveLength(1);
+ expect(()=>chat.request(event(sk,'read',{period},accessEnd),'read',accessEnd)).toThrow('expired');expect(()=>chat.request(event(sk,'send',{period,...payload},accessEnd),'send',accessEnd)).toThrow('expired');
+ expect(service.db.query('SELECT COUNT(*) AS n FROM chat_rooms').get()).toEqual({n:1});expect(service.db.query('SELECT COUNT(*) AS n FROM chat_messages').get()).toEqual({n:1});
+ chat.prune(purgeAt-1);expect(service.db.query('SELECT COUNT(*) AS n FROM chat_messages').get()).toEqual({n:1});chat.prune(purgeAt);
  expect(service.db.query('SELECT * FROM chat_rooms').all()).toEqual([]);expect(service.db.query('SELECT * FROM chat_messages').all()).toEqual([]);
+ expect((chat.request(event(sk,'rooms',{includePrevious:true},purgeAt),'rooms',purgeAt) as any).rooms).toEqual([]);
  service.db.query('INSERT INTO chat_rooms VALUES (?1,?2)').run(period-4,'old');new DailyChat(service);expect(service.db.query('SELECT * FROM chat_rooms').all()).toEqual([]);
 });
 test('browser storage prunes expired keys at exact boundary and removes keys for another identity',()=>{
  const map=new Map<string,string>();const storage={get length(){return map.size},key:(i:number)=>[...map.keys()][i],getItem:(k:string)=>map.get(k),setItem:(k:string,v:string)=>map.set(k,v),removeItem:(k:string)=>map.delete(k)};
- const expiresAt=(period+1)*PERIOD_MS;map.set('word5-chat:a',JSON.stringify([{period,expiresAt,key:'shared'}]));map.set('word5-chat:b','[]');cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has('word5-chat:b')).toBe(false);expect(JSON.parse(map.get('word5-chat:a')!)).toHaveLength(1);cryptoUI.prune(storage,'a',expiresAt);expect(JSON.parse(map.get('word5-chat:a')!)).toEqual([]);
+ const expiresAt=(period+2)*PERIOD_MS;map.set('word5-chat:a',JSON.stringify([{period,expiresAt,key:'shared'}]));map.set('word5-chat:b','[]');cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has('word5-chat:b')).toBe(false);expect(JSON.parse(map.get('word5-chat:a')!)).toHaveLength(1);cryptoUI.prune(storage,'a',expiresAt);expect(JSON.parse(map.get('word5-chat:a')!)).toEqual([]);
 });
 test('room history is bounded to the latest 200 ciphertext messages',()=>{
  const {service,chat}=fixture(),sk=generateSecretKey();finish(service,sk);
@@ -82,10 +89,24 @@ test('delta reads use stable receipt-order anchors, return empty unchanged respo
  expect(()=>chat.request(event(sk,'read',{period,after:'not-an-id'}),'read',now)).toThrow('cursor');
  service.db.query('DELETE FROM chat_messages').run();const empty=chat.request(event(sk,'read',{period,after:messages[2].id}),'read',now) as any;expect(empty.messages).toEqual([]);expect(empty.reset).toBe(true);expect(empty.cursor).toBeNull();
 });
-test('ciphertext cache is current-day and account scoped and expires with the room key',()=>{
+test('ciphertext cache is owner/room scoped across today/yesterday and expires with the room key',()=>{
  const map=new Map<string,string>();const storage={get length(){return map.size},key:(i:number)=>[...map.keys()][i],getItem:(k:string)=>map.get(k),setItem:(k:string,v:string)=>map.set(k,v),removeItem:(k:string)=>map.delete(k)};
- const expiresAt=(period+1)*PERIOD_MS;
- map.set('word5-chat-messages:a',JSON.stringify({period,expiresAt,events:[],cursor:null}));map.set('word5-chat-messages:b','{}');
- cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has('word5-chat-messages:a')).toBe(true);expect(map.has('word5-chat-messages:b')).toBe(false);
- cryptoUI.prune(storage,'a',expiresAt);expect(map.has('word5-chat-messages:a')).toBe(false);
+ const expiresAt=(period+2)*PERIOD_MS;
+ map.set(`word5-chat-messages:a:${period}`,JSON.stringify({period,expiresAt,events:[],cursor:null}));map.set(`word5-chat-messages:b:${period}`,'{}');
+ cryptoUI.prune(storage,'a',expiresAt-1);expect(map.has(`word5-chat-messages:a:${period}`)).toBe(true);expect(map.has(`word5-chat-messages:b:${period}`)).toBe(false);
+ cryptoUI.prune(storage,'a',expiresAt);expect(map.has(`word5-chat-messages:a:${period}`)).toBe(false);
+});
+
+test('new clients list exactly completed today/yesterday, reuse keys and keep per-room verified results private to authenticated reads',()=>{
+ const {service,chat}=fixture(),sk=generateSecretKey(),other=generateSecretKey();finish(service,sk,period-1,true);finish(service,sk);finish(service,sk,period-2);finish(service,other,period-1);
+ const extended=(chat.request(event(sk,'rooms',{includePrevious:true}),'rooms',now) as any).rooms;
+ expect(extended.map((r:any)=>r.period)).toEqual([period,period-1]);expect(extended.map((r:any)=>r.expiresAt)).toEqual([(period+2)*PERIOD_MS,(period+1)*PERIOD_MS]);
+ expect(rooms(chat,sk)).toHaveLength(1);expect(rooms(chat,sk)[0].expiresAt).toBe((period+1)*PERIOD_MS);expect(rooms(chat,sk)[0].key).toBe(extended[0].key);
+ const yesterdayOnly=(chat.request(event(other,'rooms',{includePrevious:true}),'rooms',now) as any).rooms;expect(yesterdayOnly.map((r:any)=>r.period)).toEqual([period-1]);
+ const e=event(sk,'send',{period:period-1,iv:'AAAAAAAAAAAAAAAA',ciphertext:'A'.repeat(24)});chat.request(e,'send',now);
+ const read=chat.request(event(other,'read',{period:period-1}),'read',now) as any;
+ expect(read.results[getPublicKey(sk)]).toEqual({period:period-1,won:false,attempts:6});
+ const delta=chat.request(event(other,'read',{period:period-1,after:e.id}),'read',now) as any;expect(delta.messages).toEqual([]);expect(delta.results).toEqual(read.results);
+ expect(()=>chat.request(event(other,'read',{period}),'read',now)).toThrow('Finish');expect(()=>chat.request(event(sk,'read',{period:period-2}),'read',now)).toThrow('expired');
+ expect(()=>chat.request(event(sk,'rooms',{includePrevious:'true'}),'rooms',now)).toThrow('option');
 });
