@@ -70,6 +70,7 @@
       "wss://relay.damus.io",
       "wss://nos.lol",
       "wss://relay.snort.social",
+      "wss://relay.primal.net",
     ];
   }
 

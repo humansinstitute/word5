@@ -3,7 +3,7 @@
     if (!window.Word5PlayerSyncCore) throw new Error("Word5 sync core unavailable");
     const { SimplePool, verifyEvent } = await import("https://esm.sh/nostr-tools@2?bundle");
     const relays = () => [...new Set((window.NostrPost?.STORAGE_RELAYS || window.NostrPost?.DEFAULT_RELAYS || [
-      "wss://relay.damus.io", "wss://nos.lol", "wss://relay.snort.social",
+      "wss://relay.damus.io", "wss://nos.lol", "wss://relay.snort.social", "wss://relay.primal.net",
     ]).filter((relay) => /^wss:\/\//.test(relay)))];
 
     async function fetchEvents(filter) {

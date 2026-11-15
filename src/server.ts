@@ -10,7 +10,7 @@ import { PublicDataPublisher, startPublicDataPublisher } from "./public-data";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const PORT = Number(process.env.PORT || 41005);
-const RELAYS = String(process.env.WORD5_RELAYS || "wss://relay.damus.io,wss://nos.lol,wss://relay.snort.social")
+const RELAYS = String(process.env.WORD5_RELAYS || "wss://relay.damus.io,wss://nos.lol,wss://relay.snort.social,wss://relay.primal.net")
   .split(",")
   .map((relay) => relay.trim())
   .filter(Boolean);

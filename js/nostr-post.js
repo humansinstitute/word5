@@ -4,6 +4,7 @@
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://relay.snort.social",
+    "wss://relay.primal.net",
   ];
   const TAGGED_NPUB =
     "npub1khev409r2pa0k8a0an005mpvgv5swnyg54eh948ccxjsax97pm3srphq8m";

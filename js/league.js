@@ -10,7 +10,7 @@
   }
 
   function getRelays() {
-    return window.SocialBoard?.RELAYS || ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.snort.social"];
+    return window.SocialBoard?.RELAYS || ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.snort.social", "wss://relay.primal.net"];
   }
 
   function sb() { return window.SocialBoard || {}; }

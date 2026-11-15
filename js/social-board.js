@@ -5,6 +5,7 @@ const RELAYS = [
   "wss://relay.damus.io",
   "wss://nos.lol",
   "wss://relay.snort.social",
+  "wss://relay.primal.net",
 ];
 
 const COMPARE_WINDOW_DAYS = 21;
