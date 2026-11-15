@@ -78,6 +78,18 @@ export function publicBoard(db:Database, days:number,now=Date.now(),authors:stri
   return {contract:CONTRACT,visibility:'public-only',days,startPeriod:current-days+1,endPeriod:current,rows,conflicts:conflicts.filter(c=>!authors.length||authors.some(a=>c.key.startsWith(a+':')))};
 }
 
+/** Comparison participants include followed players with older public history, with zero recent points. */
+export function comparisonBoard(db:Database,authors:string[],now=Date.now()) {
+  const report=publicBoard(db,21,now,authors),all=acceptedOutcomes(db,now,true).outcomes.filter(r=>!authors.length||authors.includes(r.pubkey));
+  const rows=report.rows.map(row=>({...row,allTimeGames:all.filter(r=>r.pubkey===row.pubkey).length}));
+  for(const pubkey of new Set(all.map(r=>r.pubkey)))if(!rows.some(r=>r.pubkey===pubkey)) {
+    const history=all.filter(r=>r.pubkey===pubkey);
+    rows.push({pubkey,games:0,wins:0,points:0,publishedGames:0,lastPlayedAt:Math.max(...history.map(r=>r.createdAt)),allTimeGames:history.length});
+  }
+  rows.sort((a,b)=>b.points-a.points||b.wins-a.wins||b.games-a.games||a.pubkey.localeCompare(b.pubkey));
+  return {...report,rows};
+}
+
 /** Shared owner/public statistics replay. Best baseline never seeds a current run or fabricated games. */
 export function playerReport(db:Database,pubkey:string,now=Date.now(),nativeBaseline=false,publicOnly=false,projection?:ReturnType<typeof acceptedOutcomes>) {
     if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error("Invalid player pubkey");

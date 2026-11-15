@@ -105,3 +105,9 @@ test('display puzzle zero at the thousand-period rollover is a valid public outc
  const f=fixture();f.service.socialHistory.archive(f.score(21000,'3'));
  expect(acceptedOutcomes(f.service.db,21000*86400000+30000,true).outcomes[0]).toMatchObject({periodId:21000,result:'3',points:5});
 });
+
+test('server comparison retains inactive public participants with zero recent points and stable shared ranking',async()=>{
+ const {comparisonBoard}=await import('../src/reconciliation');const f=fixture();f.service.socialHistory.archive(f.score(f.period-30));
+ expect(comparisonBoard(f.service.db,[f.pubkey],f.now).rows[0]).toMatchObject({pubkey:f.pubkey,points:0,games:0,allTimeGames:1});
+ expect(publicBoard(f.service.db,21,f.now).rows).toHaveLength(0);
+});

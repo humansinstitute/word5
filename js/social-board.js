@@ -787,33 +787,12 @@ async function subscribeToFollows() {
       return;
     }
 
-    const now = Math.floor(Date.now() / 1000);
-    const events = await fetchArchivedScoreHistory(followPubkeys, now - 400 * 86400, now);
-
-    const recentScoreMap = buildScoreMap(
-      events,
-      COMPARE_WINDOW_DAYS,
-      new Set(followPubkeys)
-    );
-    const allTimeScoreMap = buildScoreMap(events, 3650, new Set(followPubkeys));
-
-    const summaries = Array.from(allTimeScoreMap.entries())
-      .map(([pubkey, allEntries]) => {
-        const recentEntries = recentScoreMap.get(pubkey) || [];
-        const recentSummary = buildPlayerSummary(pubkey, recentEntries);
-        return {
-          ...recentSummary,
-          lastPlayedAt: allEntries[0]?.createdAt || 0,
-          allTimeGamesPlayed: allEntries.length,
-        };
-      })
-      .sort((a, b) => {
-        const aRecent = a.gamesPlayed > 0 ? 1 : 0;
-        const bRecent = b.gamesPlayed > 0 ? 1 : 0;
-        if (bRecent !== aRecent) return bRecent - aRecent;
-        if (b.score !== a.score) return b.score - a.score;
-        return b.lastPlayedAt - a.lastPlayedAt || a.pubkey.localeCompare(b.pubkey);
-      });
+    const batches=await Promise.all(Array.from({length:Math.ceil(followPubkeys.length/100)},(_,i)=>followPubkeys.slice(i*100,i*100+100)).map(async authors=>{
+      const response=await fetch(`api/comparison?authors=${authors.join(',')}`,{cache:'no-store'});
+      const report=await response.json();if(!response.ok||report.contract!=='word5.calculation.v1')throw new Error('Server comparison contract unavailable');return report.rows;
+    }));
+    const summaries=batches.flat().sort((a,b)=>b.points-a.points||b.wins-a.wins||b.games-a.games||a.pubkey.localeCompare(b.pubkey))
+      .map(row=>({pubkey:row.pubkey,score:row.points,gamesPlayed:row.games,entries:[],lastPlayedAt:row.lastPlayedAt,allTimeGamesPlayed:row.allTimeGames}));
 
     if (summaries.length === 0) {
       showEmptyState("No published WORD5 results from your follows yet.");

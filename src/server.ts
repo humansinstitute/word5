@@ -3,7 +3,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { NativeBackup, backupRequest, BackupError } from "./native-backup";
 import { DailyChat } from "./chat";
 import { ReconciliationSnapshot, snapshotRequest } from "./reconciliation-snapshot";
-import { CONTRACT, publicBoard } from "./reconciliation";
+import { CONTRACT, comparisonBoard } from "./reconciliation";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
 import { VisitAnnouncer } from "./visit-announcements";
@@ -219,7 +219,7 @@ const server = Bun.serve({
       if (url.pathname === "/api/comparison" && req.method === "GET") {
         const authors=(url.searchParams.get("authors")||"").split(",").filter(Boolean);
         if(authors.length>100||authors.some(a=>!/^[0-9a-f]{64}$/.test(a)))throw new Error("Invalid authors");
-        return json(publicBoard(service.db,21,Date.now(),authors));
+        return json(comparisonBoard(service.db,authors));
       }
       if (url.pathname === "/api/top-streaks" && req.method === "GET") {
         const limitText = url.searchParams.get("limit") || "50";
