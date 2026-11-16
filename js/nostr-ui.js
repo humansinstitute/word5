@@ -407,10 +407,12 @@
   }
 
   async function reconstructWord5Stats(pubkey) {
-    const report=window.Word5ServerHistory.withPending(await window.Word5ServerHistory.read(pubkey));
+    const response = await fetch(`api/player-history?pubkey=${encodeURIComponent(pubkey)}`, { cache: "no-store", signal: AbortSignal.timeout(10000) });
+    const report = await response.json();
+    if (!response.ok || !report.ok || report.pubkey !== pubkey) throw new Error(report.error || "Server history unavailable");
     if (getIdentityPubkey(window.NostrSession?.getPlayer()) !== pubkey) throw new Error("Account changed while restoring history; retry for this account");
     return { stats: report.stats, entries: [], meta: { pubkey, lastPeriodId: report.lastPeriodId, lastPuzzle: report.lastPuzzle,
-      provisional:report.provisional, uniqueGames: report.historyCount, totalEvents: report.historyCount, hasCorrection: Boolean(report.correctionEventId),
+      uniqueGames: report.historyCount, totalEvents: report.historyCount, hasCorrection: Boolean(report.correctionEventId),
       source: "server-archive", lastPlayedAt: report.lastPeriodId === null ? 0 : report.lastPeriodId * 86400 } };
   }
 
@@ -727,11 +729,11 @@
         <div id="profileSaveStatus"></div>
         <div style="border-top:1px solid #3a3a3c;margin-top:14px;padding-top:12px;">
           <div class="profile-label">Stats</div>
-          <div class="profile-modal-subtle">Restore accepted server statistics. Pending private games stay on this device.</div>
+          <div class="profile-modal-subtle">Rebuild WORD5 stats from signed posts since ${WORD5_REPAIR_SINCE_LABEL}.</div>
           <div class="profile-actions" style="margin-top:10px;">
             <button id="profileRepairBtn" class="nostr-btn" type="button">Repair streak from Nostr</button>
           </div>
-          <div class="profile-modal-subtle" style="margin-top:12px;">Propose a lower baseline with a signed correction. The server keeps accepted lifetime bests until review.</div>
+          <div class="profile-modal-subtle" style="margin-top:12px;">Lower this browser's local stats and publish that signed baseline for future WORD5 posts.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
             <label>
               <span class="profile-modal-subtle">Current</span>
@@ -1248,7 +1250,7 @@
 
     repairBtn.disabled = true;
     repairBtn.textContent = "Repairing...";
-    repairStatus.textContent = "Restoring accepted server history…";
+    repairStatus.textContent = `Scanning signed WORD5 posts since ${WORD5_REPAIR_SINCE_LABEL}…`;
 
     try {
       if (window.NostrSigners?.ready) {
@@ -1345,7 +1347,7 @@
       persistWord5Stats(nextStats);
       refreshStatsCorrectionInputs(nextStats);
       await publishWord5StatsCorrection(nextStats, existing);
-      repairStatus.textContent = `Local correction proposed. Accepted server lifetime best changes after review.`;
+      repairStatus.textContent = `Stats corrected. Streak ${nextStats.streak}, best ${nextStats.maxStreak}.`;
       showToast("Stats correction published");
     } catch (e) {
       repairStatus.textContent = e?.message || String(e);

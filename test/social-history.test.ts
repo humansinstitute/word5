@@ -42,7 +42,6 @@ describe("server-backed social history", () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), "word5-seed-")), "word5.sqlite");
     const first = new Word5Service({ rootDir, dbPath, relays: [], gamestrRelays: [] });
     expect(first.bootstrapResult).toEqual({ imported: 1793, existing: 0, rejected: 0 });
-    first.db.query("INSERT INTO lifetime_best_decisions(decision_id,pubkey,max_streak,source_event_id,provenance,reason,effective_at) VALUES('daniel-reviewed','ee6ea13ab9fe5c4a68eaf9b1a34fe014a66b40117c50ee2a614f4cda959b6e74',114,'8071c8522dd3a5b746ecf67e54b5226850f482ec4ccb9de2414759139cc7fba0','self-published','fixture reviewed',0)").run();
     const daniel = first.socialHistory.topStreaks(200).rows.find((row: any) => row.pubkey === "ee6ea13ab9fe5c4a68eaf9b1a34fe014a66b40117c50ee2a614f4cda959b6e74");
     expect(daniel).toMatchObject({
       pubkey: "ee6ea13ab9fe5c4a68eaf9b1a34fe014a66b40117c50ee2a614f4cda959b6e74",
@@ -73,7 +72,6 @@ describe("server-backed social history", () => {
     history.archive(score(secret, 3000, 21, 40, { streak: 20, played: 50, won: 45 }));
     const plausible = score(secret, 4000, 30, 12, { streak: 3 });
     history.archive(plausible);
-    history.db.query("INSERT INTO lifetime_best_decisions(decision_id,pubkey,max_streak,source_event_id,provenance,reason,effective_at) VALUES('reviewed',?,12,?,'self-published','fixture reviewed',0)").run(plausible.pubkey,plausible.id);
     expect(history.topStreaks().rows[0]).toMatchObject({
       maxStreak: 12, eventId: plausible.id, latestCorrectionEventId: correction.id,
     });
@@ -82,9 +80,9 @@ describe("server-backed social history", () => {
   test("filters history by author and time and enforces bounds", () => {
     const history = new SocialHistory(database());
     const first = generateSecretKey(), second = generateSecretKey();
-    const a = score(first, 86400+1000, 1, 2), b = score(first, 172800+2000, 2, 3), c = score(second, 172800+2000, 2, 4);
+    const a = score(first, 1000, 1, 2), b = score(first, 2000, 2, 3), c = score(second, 2000, 2, 4);
     for (const event of [a, b, c]) history.archive(event);
-    expect(history.history({ authors: [a.pubkey], since: 172800, until: 175000, limit: 10 }).rows.map((row: any) => row.eventId)).toEqual([b.id]);
+    expect(history.history({ authors: [a.pubkey], since: 1500, until: 2500, limit: 10 }).rows.map((row: any) => row.eventId)).toEqual([b.id]);
     expect(() => history.history({ since: 0, until: 401 * 86400 })).toThrow("400 days");
     expect(() => history.history({ authors: Array.from({ length: 101 }, (_, index) => index.toString(16).padStart(64, "0")) })).toThrow("at most 100");
     expect(() => history.history({ limit: 2001 })).toThrow("1-2000");
@@ -102,12 +100,12 @@ describe("server-backed social history", () => {
     const event = score(generateSecretKey(), 10_000, 10, 4);
     const calls: number[] = [];
     const fetcher = async (_relays: string[], since: number) => { calls.push(since); return [event]; };
-    expect(await history.catchUp(["wss://relay.test"], fetcher, 11_000)).toMatchObject({ imported: 1, cursors: {"wss://relay.test":11000} });
+    expect(await history.catchUp(["wss://relay.test"], fetcher, 11_000)).toMatchObject({ imported: 1, cursor: 10_000 });
     db.close();
     db = new Database(path);
     history = new SocialHistory(db);
-    expect(await history.catchUp(["wss://relay.test"], fetcher, 12_000)).toMatchObject({ imported: 0, cursors: {"wss://relay.test":12000} });
-    expect(calls[1]).toBe(Math.max(0, 11_000 - 86400));
+    expect(await history.catchUp(["wss://relay.test"], fetcher, 12_000)).toMatchObject({ imported: 0, cursor: 10_000 });
+    expect(calls[1]).toBe(Math.max(0, 10_000 - 2 * 86400));
     expect(db.query("SELECT COUNT(*) AS count FROM public_score_history").get()).toEqual({ count: 1 });
   });
 

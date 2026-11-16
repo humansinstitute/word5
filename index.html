@@ -816,7 +816,6 @@
   <script src="js/nostr-session.js?v=20261111-1"></script>
   <script src="js/visit-tracker.js?v=20260930-1"></script>
   <script src="js/nostr-signers.js?v=20261111-6"></script>
-  <script src="js/server-history.js?v=20261116-1"></script>
   <script src="js/nostr-post.js?v=20261115-primal"></script>
   <script src="js/player-sync.js?v=20261111-6"></script>
   <script src="js/player-sync-browser.js?v=20261115-primal"></script>
@@ -1356,7 +1355,7 @@
         played: Number(nextStats.played) || 0,
         won: Number(nextStats.won) || 0,
         streak: Number(nextStats.streak) || 0,
-        maxStreak: Math.max(Number(nextStats.maxStreak) || 0, state.acceptedLifetimeBest || 0),
+        maxStreak: Number(nextStats.maxStreak) || 0,
       };
       if (meta && Number(meta.lastPuzzle)) {
         state.lastCompletedPuzzle = Number(meta.lastPuzzle) || 0;
@@ -1444,7 +1443,6 @@
       const saveData = {
         owner: gameOwner,
         serverCompleted: Boolean(state.serverCompleted),
-        acceptedLifetimeBest: state.acceptedLifetimeBest || 0,
         serverResult: state.serverResult || null,
         periodId: state.periodId,
         lastCompletedPuzzle: state.lastCompletedPuzzle,
@@ -1458,18 +1456,6 @@
         gameUpdatedAt: state.gameUpdatedAt,
         stats: state.stats
       };
-      if(gameOwner && state.gameOver && state.guesses.length) {
-        const archiveKey=`word5-local-completed-${gameOwner}-${state.periodId}`;
-        if(!localStorage.getItem(archiveKey))localStorage.setItem(archiveKey,JSON.stringify(saveData));
-      }
-      const account=window.NostrSession?.getPlayer?.();
-      if(gameOwner && account?.auth_mode!=='anonymous' && state.gameOver && !state.serverCompleted && state.guesses.length) {
-        const pendingKey=`word5-pending-completion-${gameOwner}-${state.periodId}`;
-        if(!localStorage.getItem(pendingKey)) localStorage.setItem(pendingKey,JSON.stringify({
-          kind:30078,created_at:state.completedAt||Math.floor(Date.now()/1000),tags:[['schema','word5.completion.v1']],
-          content:JSON.stringify({game:'word5',periodId:state.periodId,puzzle:state.periodId%1000,date:getDateForPeriod(state.periodId),result:state.won?String(state.guesses.length):'X',guesses:state.guesses.map(g=>g.toUpperCase()),hardMode:Boolean(state.hardMode)})
-        }));
-      }
       localStorage.setItem('words-game', JSON.stringify(saveData));
       if (gameOwner) localStorage.setItem(`words-game:${gameOwner}`, JSON.stringify(saveData));
     }
@@ -1488,7 +1474,6 @@
         try {
           const data = JSON.parse(saved);
           state.stats = data.stats || state.stats;
-          state.acceptedLifetimeBest = Number(data.acceptedLifetimeBest)||0;
           state.lastCompletedPuzzle = Number(data.lastCompletedPuzzle) || 0;
           // Old modulo-only caches cannot prove the age of a streak. Keep their totals,
           // but require an absolute period before continuing the active run offline.
@@ -1522,12 +1507,11 @@
       const revision = ++historyRevision;
       const pubkey = gameOwner;
       try {
-        const report=window.Word5ServerHistory.withPending(await window.Word5ServerHistory.read(pubkey));
-        if(report.periodId!==state.periodId)throw new Error('Server history day mismatch');
+        const response = await fetch(`api/player-history?pubkey=${encodeURIComponent(pubkey)}`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+        const report = await response.json();
+        if (!response.ok || !report.ok || report.pubkey !== pubkey || report.periodId !== state.periodId) throw new Error(report.error || 'Server history unavailable');
         if (revision !== historyRevision || pubkey !== gameOwner) return;
-        state.stats={...report.stats};
-        state.acceptedLifetimeBest=report.lifetimeBaseline?.maxStreak??0;
-        const pending=report.pendingPeriods.map(periodId=>({periodId}));
+        state.stats = { ...report.stats };
         state.lastCompletedPuzzle = report.lastPuzzle;
         state.lastPeriodId = report.lastPeriodId;
         const wasGameOver = state.gameOver;
@@ -1535,7 +1519,7 @@
         state.serverResult = report.currentResult;
         if (report.completed) {
           state.gameOver = true; state.won = report.currentResult !== 'X';
-        } else if (state.gameOver && !pending.some(g=>g.periodId===state.periodId)) {
+        } else if (state.gameOver) {
           // A locally completed score awaiting signature/upload is counted once over the server baseline.
           updateStatsForCompletedGame(state.won);
         }
@@ -1569,8 +1553,8 @@
       state.guesses = []; state.currentGuess = ''; state.gameOver = false; state.won = false;
       state.completedAt = 0; state.gameUpdatedAt = 0; state.serverCompleted = false; state.serverResult = null;
       state.lastCompletedPuzzle = null; state.lastPeriodId = null;
-      state.stats = { played: 0, won: 0, streak: 0, maxStreak: 0 }; state.acceptedLifetimeBest=0;
-      loadState(); saveState(); updateBoard(); updateKeyboard(); renderStatsSummary();
+      state.stats = { played: 0, won: 0, streak: 0, maxStreak: 0 };
+      loadState(); updateBoard(); updateKeyboard(); renderStatsSummary();
       _nostrSyncPromise = syncStatsFromNostr();
     }
 
@@ -1759,29 +1743,8 @@
       updatePublicationStatus();
       const completionKey = () => { const p=window.NostrSession?.getPlayer?.(); return `word5-completion-${state.periodId}-${p?.linked_pubkey || p?.pubkey || 'anonymous'}`; };
 
-      let completionDrainPromise=null;
-      async function drainCompletionQueue() {
-        if(completionDrainPromise)return completionDrainPromise;
-        completionDrainPromise=drainPendingCompletions();
-        try{return await completionDrainPromise}finally{completionDrainPromise=null}
-      }
-      async function drainPendingCompletions() {
-        const owner=gameOwner;if(!owner)return;
-        const keys=Object.keys(localStorage).filter(k=>k.startsWith(`word5-pending-completion-${owner}-`)).sort();
-        if(!keys.length)return;
-        const signer=await window.NostrSigners.getActiveSigner();
-        for(const key of keys) {
-          if(owner!==gameOwner)return;
-          let event=JSON.parse(localStorage.getItem(key));
-          if(!event.sig){event=await signer.signEvent(event);if(event.pubkey!==owner||owner!==gameOwner)throw new Error('Account changed');localStorage.setItem(key,JSON.stringify(event));}
-          await WORD5_SERVER_API.send('api/completion',event);
-          localStorage.removeItem(key);
-        }
-      }
-      window.addEventListener('online',()=>recordCompletedScore());
       recordCompletedScore = async function () {
-        try { await drainCompletionQueue(); if(state.gameOver)await syncStatsFromNostr(); } catch(error) { scoreStatus.textContent=`Score pending: ${error.message||error}. Local outcomes kept.`;return null; }
-        if (!state.gameOver || state.serverCompleted) { await syncStatsFromNostr();return null; }
+        if (!state.gameOver || state.serverCompleted) return null;
         if (completionPromise) return completionPromise;
         completionPromise = (async () => {
           if (_nostrSyncPromise) await _nostrSyncPromise;
@@ -1840,8 +1803,8 @@
         await syncStatsFromNostr();
         await recordCompletedScore();
       };
-      window.addEventListener("player-ready", () => { void recordCompletedScore(); });
-      if (state.gameOver || Object.keys(localStorage).some(k=>k.startsWith(`word5-pending-completion-${gameOwner}-`))) {
+      window.addEventListener("player-ready", () => { if (state.gameOver && !state.serverCompleted) void recordCompletedScore(); });
+      if (state.gameOver) {
         void recordCompletedScore().then(async (saved) => {
           const posted = savedPublication();
           if (saved && posted) {

@@ -25,7 +25,7 @@ object Corrections {
         require(tags["t"] == "word5" && tags["game"] == "word5" && tags["schema"] == "word5.stats.v1" && tags["type"] == "stats-correction" && tags["version"] == "1") { "Unsupported stats correction." }
         fun number(key: String): Int { val text = tags.getValue(key); require(text.matches(Regex("0|[1-9][0-9]{0,5}"))); return text.toInt().also { require(it in 0..100000) } }
         val p = number("played"); val w = number("won"); val s = number("streak"); val m = number("maxStreak")
-        require(w <= p && s <= m && s <= w && m <= 100000) { "Invalid correction counters." }
+        require(w <= p && s <= m && m <= w) { "Invalid correction counters." }
         val payload = JSONObject(event.content); payload.exact("game", "type", "stats", "version")
         require(payload.get("game") == "word5" && payload.get("type") == "stats-correction" && payload.longValue("version") == 1L)
         val stats = payload.getJSONObject("stats"); stats.exact("played", "won", "streak", "maxStreak")
@@ -33,7 +33,7 @@ object Corrections {
         require(tags.containsKey("previousStreak") == tags.containsKey("previousMaxStreak"))
         if (tags.containsKey("previousStreak")) {
             val previous = Stats(p, w, number("previousStreak"), number("previousMaxStreak"), emptyList())
-            require(previous.streak <= previous.best && previous.best <= 100000)
+            require(previous.streak <= previous.best && previous.best <= w)
             validateLowering(previous, s, m)
         }
         return Stats(p, w, s, m, emptyList())
@@ -47,7 +47,7 @@ object Corrections {
         require(overlay.covered.all { overlay.lastPeriod != null && it <= overlay.lastPeriod })
         require((day in overlay.covered) == (overlay.lastPeriod == day))
         require(stats.streak == 0 || overlay.lastPeriod != null && overlay.lastPeriod >= day - 1) { "Invalid correction streak anchor." }
-        require(overlay.previousStreak in 0..stats.won && overlay.previousBest in overlay.previousStreak..100000)
+        require(overlay.previousStreak in 0..stats.won && overlay.previousBest in overlay.previousStreak..stats.won)
         validateLowering(Stats(stats.played, stats.won, overlay.previousStreak, overlay.previousBest, emptyList()), stats.streak, stats.best)
         val tags = overlay.event.tags.associate { it[0] to it[1] }
         if ("previousStreak" in tags) require(tags["previousStreak"] == overlay.previousStreak.toString() && tags["previousMaxStreak"] == overlay.previousBest.toString())
@@ -58,7 +58,7 @@ object Corrections {
         val a=base.correctionAnchor ?: return
         require(base.correction?.matches(Regex("[0-9a-f]{64}")) == true && base.correctionCreated != null) { "Correction seed has no correction identity." }
         val day=base.correctionCreated / 86400
-        require(day in 0..base.through && a.streak in 0..a.maxStreak && a.maxStreak <= 100000) { "Invalid correction seed counters." }
+        require(day in 0..base.through && a.streak in 0..a.maxStreak && a.maxStreak <= base.won) { "Invalid correction seed counters." }
         require(a.lastPeriod == null || a.lastPeriod in 0..day)
         require(a.streak == 0 || a.lastPeriod != null)
         require(a.covered.size <= 1 && a.covered.all { it == day && a.lastPeriod == day && it in base.covered }) { "Invalid correction seed coverage." }

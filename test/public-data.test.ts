@@ -37,7 +37,6 @@ describe("public Word5 relay data", () => {
       (event_id,pubkey,period_id,puzzle,puzzle_date,result,points,hard_mode,guesses_json,verified_completion,published_at,public_event_id)
       VALUES (?1,?2,?3,?4,?5,'1',10,0,'[]',1,'yes',?6)`)
       .run("private-completion-id", getPublicKey(player), period, period % 1000, getDateForPeriod(period), source.id);
-    service.db.query("INSERT INTO lifetime_best_decisions(decision_id,pubkey,max_streak,source_event_id,provenance,reason,effective_at) VALUES('reviewed',?,114,?,'self-published','reviewed fixture',?)").run(source.pubkey,source.id,source.created_at);
     const outbox = new RelayOutbox(service.db, async () => true);
     const publisher = new PublicDataPublisher(service.db, serverSecret, ["wss://a.test", "wss://b.test"], service.socialHistory, outbox);
     const now = (period + 1) * 86400000 + 21 * 60000;
@@ -56,7 +55,7 @@ describe("public Word5 relay data", () => {
     expect(topContent.rows[0]).toMatchObject({ rank: 1, pubkey: source.pubkey, maxStreak: 114, sourceEventId: source.id });
     const daily = events.find((event) => event.tags.some((tag) => tag[1] === DAILY_D(period)))!;
     const dailyContent = JSON.parse(daily.content);
-    expect(dailyContent.basis).toBe("reconciled-public-history");
+    expect(dailyContent.basis).toBe("server-verified");
     expect(dailyContent.cutoff).toMatchObject({ periodId: period, date: getDateForPeriod(period) });
     expect(dailyContent.rows[0]).toMatchObject({ rank: 1, pubkey: source.pubkey, points: 10, sourceEventId: source.id });
     expect(JSON.stringify(dailyContent)).not.toContain("private-completion-id");

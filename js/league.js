@@ -414,7 +414,7 @@
 
       const parseWord5Event = sb().parseWord5Event;
       if (!parseWord5Event) return [];
-      return (events || []).map(parseWord5Event).filter((score) => score && score.periodId >= Math.floor(weekStart/86400) && score.periodId <= Math.floor(weekEnd/86400));
+      return (events || []).map(parseWord5Event).filter((score) => score && score.createdAt >= weekStart && score.createdAt <= weekEnd);
     } catch (e) {
       console.log("[League] Server score-history fetch error:", e);
       return [];
@@ -430,7 +430,7 @@
     const latestByKey = new Map();
     for (const s of scores) {
       if (!memberSet.has(s.pubkey)) continue;
-      const key = `${s.pubkey}:${s.periodId}`;
+      const key = `${s.pubkey}:${s.puzzle}`;
       const existing = latestByKey.get(key);
       if (!existing || s.createdAt > existing.createdAt) {
         latestByKey.set(key, s);
@@ -822,7 +822,7 @@
     const latestByKey = new Map();
     for (const s of scores) {
       if (!memberSet.has(s.pubkey)) continue;
-      const key = `${s.pubkey}:${s.periodId}`;
+      const key = `${s.pubkey}:${s.puzzle}`;
       const existing = latestByKey.get(key);
       if (!existing || s.createdAt > existing.createdAt) {
         latestByKey.set(key, s);
@@ -836,7 +836,7 @@
 
       const dayScores = new Map();
       for (const s of latestByKey.values()) {
-        if (s.periodId === Math.floor(start/86400)) {
+        if (s.createdAt >= start && s.createdAt <= end) {
           const existing = dayScores.get(s.pubkey);
           if (!existing || s.createdAt > existing.createdAt) {
             dayScores.set(s.pubkey, s);
@@ -957,15 +957,15 @@
     if (loadProfiles) await loadProfiles([pubkey]);
     const identity = getDisplayIdentity ? await getDisplayIdentity(pubkey) : { name: pubkey.slice(0, 8), avatar: "" };
 
-    const scores = (await sb().fetchArchivedScoreHistory([pubkey],weekStart,weekEnd)).map(sb().parseWord5Event).filter(Boolean);
+    const scores = await window.Word5Cache.getScoresForWindow([pubkey], weekStart, weekEnd);
 
     // Dedupe by puzzle
     const byPuzzle = new Map();
     for (const s of scores) {
       if (s.pubkey !== pubkey) continue;
-      const existing = byPuzzle.get(s.periodId);
+      const existing = byPuzzle.get(s.puzzle);
       if (!existing || s.createdAt > existing.createdAt) {
-        byPuzzle.set(s.periodId, s);
+        byPuzzle.set(s.puzzle, s);
       }
     }
     const entries = Array.from(byPuzzle.values()).sort((a, b) => b.createdAt - a.createdAt);

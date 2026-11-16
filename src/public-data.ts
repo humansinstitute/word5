@@ -1,4 +1,3 @@
-import { acceptedOutcomes, CONTRACT } from "./reconciliation";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { finalizeEvent, getPublicKey, type Event } from "nostr-tools";
@@ -15,7 +14,7 @@ const DAILY_CUTOFF_DELAY_MS = 21 * 60_000;
 type SnapshotSpec = {
   address: string;
   dataset: "top-streaks" | "daily-scores";
-  basis: "signed-public-history" | "server-verified" | "reconciled-public-history";
+  basis: "signed-public-history" | "server-verified";
   cutoff: Record<string, string | number>;
   rows: Array<Record<string, unknown>>;
   tags?: string[][];
@@ -40,11 +39,10 @@ export class PublicDataPublisher {
   ensure(now = Date.now()): Event[] {
     if (!this.secretKey || !this.relays.length) return [];
     const generated: Event[] = [];
-    const top = this.socialHistory.topStreaks(200,now).rows.map((row: any, index: number) => ({
+    const top = this.socialHistory.topStreaks(200).rows.map((row: any, index: number) => ({
       rank: index + 1, pubkey: row.pubkey, maxStreak: row.maxStreak,
       streak: row.streak, played: row.played, won: row.won,
       sourceEventId: row.eventId,
-      provenance: row.source, decisionId: row.decisionId, baselineMaxStreak: row.baselineMaxStreak,
       latestCorrectionEventId: row.latestCorrectionEventId || null,
     }));
     const newestHistory = this.db.query("SELECT MAX(created_at) AS value FROM public_score_history").get() as { value: number | null };
@@ -55,12 +53,13 @@ export class PublicDataPublisher {
     const dailyPeriod = getCurrentPeriodId(now) - 1;
     const cutoffMs = (dailyPeriod + 1) * PERIOD_MS + DAILY_CUTOFF_DELAY_MS;
     if (now >= cutoffMs) {
-      const rows=acceptedOutcomes(this.db,now,true).outcomes.filter(r=>r.periodId===dailyPeriod)
-        .sort((a,b)=>b.points-a.points||a.pubkey.localeCompare(b.pubkey))
-        .map(r=>({pubkey:r.pubkey,points:r.points,result:r.result,sourceEventId:r.eventId,provenance:r.source}));
-      const ranked = rows.map((row,index)=>({rank:index+1,...row}));
+      const rows = this.db.query(`SELECT pubkey,points,result,hard_mode AS hardMode,public_event_id AS sourceEventId
+        FROM game_submissions WHERE period_id=?1 AND verified_completion=1
+        AND published_at IS NOT NULL AND public_event_id IS NOT NULL
+        ORDER BY points DESC,result ASC,pubkey ASC`).all(dailyPeriod) as Array<Record<string, unknown>>;
+      const ranked = rows.map((row, index) => ({ rank: index + 1, ...row, hardMode: Boolean(row.hardMode) }));
       const dailyEvent = this.ensureSnapshot({ address: DAILY_D(dailyPeriod), dataset: "daily-scores",
-        basis: "reconciled-public-history", cutoff: { periodId: dailyPeriod, puzzle: getGameNumberForPeriod(dailyPeriod),
+        basis: "server-verified", cutoff: { periodId: dailyPeriod, puzzle: getGameNumberForPeriod(dailyPeriod),
           date: getDateForPeriod(dailyPeriod), cutoffAt: Math.floor(cutoffMs / 1000) }, rows: ranked,
         tags: [["period", String(dailyPeriod)], ["date", getDateForPeriod(dailyPeriod)],
           ["puzzle", String(getGameNumberForPeriod(dailyPeriod))]] }, now);
@@ -70,7 +69,7 @@ export class PublicDataPublisher {
   }
 
   private ensureSnapshot(spec: SnapshotSpec, now: number): Event | null {
-    const canonical = JSON.stringify({ contract: CONTRACT, schema: WORD5_PUBLIC_SCHEMA, dataset: spec.dataset,
+    const canonical = JSON.stringify({ schema: WORD5_PUBLIC_SCHEMA, dataset: spec.dataset,
       basis: spec.basis, cutoff: spec.cutoff, rows: spec.rows });
     const payloadHash = createHash("sha256").update(canonical).digest("hex");
     const existing = this.db.query(`SELECT event_json AS eventJson FROM public_snapshot_events

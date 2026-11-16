@@ -10,7 +10,7 @@ if(!bundle.success)throw Error(String(bundle.logs));const moduleText=await bundl
 let completed=false, failLink=true;const publications:any[]=[];
 const server=Bun.serve({port:0,async fetch(req){const u=new URL(req.url);
  if(u.pathname==='/tools.js')return new Response(moduleText,{headers:{'content-type':'text/javascript'}});
- if(u.pathname==='/api/player-history')return Response.json({ok:true,contract:'word5.calculation.v1',pubkey:req.method==='POST'?(await req.json()).event.pubkey:u.searchParams.get('pubkey'),periodId:period,completed,currentResult:completed?'5':null,lastPuzzle:period%1000,lastPeriodId:period,coveredPeriods:[],distribution:[0,0,0,0,1,0],stats:{played:1,won:1,streak:1,maxStreak:1}});
+ if(u.pathname==='/api/player-history')return Response.json({ok:true,pubkey:u.searchParams.get('pubkey'),periodId:period,completed,currentResult:completed?'5':null,lastPuzzle:period%1000,lastPeriodId:period,coveredPeriods:[],distribution:[0,0,0,0,1,0],stats:{played:1,won:1,streak:1,maxStreak:1}});
  if(u.pathname==='/api/completion'){completed=true;return Response.json({ok:true,submission:{points:2}})}
  if(u.pathname==='/api/publication'){publications.push((await req.json()).event);return Response.json(failLink?{ok:false,error:'offline fixture'}:{ok:true},{status:failLink?503:200})}
  if(u.pathname.startsWith('/api/'))return Response.json({ok:true,rows:[],rooms:[],messages:[],count:0});

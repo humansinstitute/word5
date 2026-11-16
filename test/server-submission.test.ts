@@ -69,7 +69,7 @@ describe("Word5 server submissions", () => {
     expect(result.submission.eventId).toBe(event.id);
     expect(result.submission.pubkey).toBe(pubkey);
     expect(result.attestation).toBeNull();
-    expect(service.leaderboard().rows).toHaveLength(0); // legacy private submission does not authorize public projection
+    expect(service.leaderboard().rows).toHaveLength(1);
   });
 
   test("rejects completed guesses that do not match the signed result", async () => {

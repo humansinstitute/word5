@@ -46,7 +46,7 @@ describe("private completion scores", () => {
     const answer = getWordForPeriod(service.answers, period);
     const accepted = completion(service, secret, period, ["OTHER", answer], "2");
     expect(service.complete(accepted, now).submission.points).toBe(7);
-    expect(service.scores(1, false, 50, now).rows).toHaveLength(0);
+    expect(service.scores(1, false, 50, now).rows).toHaveLength(1);
     const cases = [
       completion(service, player(), period, [], "X"),
       completion(service, player(), period, ["ZZZZZ", answer], "2"),
@@ -58,15 +58,15 @@ describe("private completion scores", () => {
     expect(() => service.complete({ ...accepted, content: accepted.content.replace("OTHER", "BRAVE") }, now)).toThrow();
   });
 
-  test("rejects future periods and accepts offline retry in the original signed UTC day", () => {
+  test("rejects wrong periods and accepts only a short rollover grace", () => {
     const { service } = fixture();
     const secret = player();
     expect(() => service.complete(completion(service, secret, period + 1), now)).toThrow("period");
-    expect(service.complete(completion(service, player(), period - 2), now).ok).toBe(true);
+    expect(() => service.complete(completion(service, secret, period - 2), now)).toThrow("period");
     const old = completion(service, secret, period - 1, undefined, undefined, (period - 1) * 86400 + 86390);
     expect(service.complete(old, period * 86400000 + 30000).ok).toBe(true);
     const other = completion(service, player(), period - 1, undefined, undefined, (period - 1) * 86400 + 86390);
-    expect(service.complete(other, period * 86400000 + 121000).ok).toBe(true);
+    expect(() => service.complete(other, period * 86400000 + 121000)).toThrow("period");
   });
 
   test("retry is idempotent and later improvement cannot replace the first score", () => {
@@ -77,8 +77,7 @@ describe("private completion scores", () => {
     expect(service.complete(first, now).submission.points).toBe(7);
     expect(service.complete(first, now).submission.eventId).toBe(first.id);
     expect(() => service.complete(completion(service, secret, period, [answer], "1"), now)).toThrow("already submitted");
-    expect(service.playerHistory(getPublicKey(secret),now).stats.played).toBe(1);
-    expect(service.scores(1,false,50,now).rows).toHaveLength(0);
+    expect(service.scores(1, false, 50, now).rows[0]?.points).toBe(7);
   });
 
   test("signed sync status exposes only whether that same player completed the period", () => {
@@ -104,7 +103,7 @@ describe("private completion scores", () => {
     const saved = service.complete(event, now);
     expect(saved.submission.eventId).toBe(event.id);
     expect(saved.submission.verifiedCompletion).toBe(1);
-    expect(service.scores(1, false, 50, now).rows).toHaveLength(0);
+    expect(service.scores(1, false, 50, now).rows).toHaveLength(1);
     expect(service.complete(event, now).submission.eventId).toBe(event.id);
   });
 
@@ -114,8 +113,7 @@ describe("private completion scores", () => {
     const miss = ["APPLE", "BRAVE", "CRANE", "OTHER"].find(word => word !== answer)!;
     const event = completion(service, player(), period, Array(6).fill(miss), "X");
     expect(service.complete(event, now).submission.points).toBe(0);
-    expect(service.playerHistory(event.pubkey,now).stats).toMatchObject({played:1,won:0});
-    expect(service.scores(1,false,50,now).rows).toHaveLength(0);
+    expect(service.scores(1, false, 50, now).rows[0]).toMatchObject({ games: 1, points: 0, wins: 0 });
   });
 
   test("all winning guess counts use the established point schedule", () => {
@@ -182,7 +180,6 @@ describe("private completion scores", () => {
     for (const [secret, offset] of [[a, 0], [a, -6], [a, -20], [b, 0]] as const) {
       const p = period + offset;
       service.complete(completion(service, secret, p), p * 86400000 + 200000);
-      service.socialHistory.archive(publicPost(secret,p,"1"));
     }
     expect(service.scores(1, false, 50, now).rows).toHaveLength(2);
     expect(service.scores(7, false, 50, now).rows[0]?.games).toBe(2);

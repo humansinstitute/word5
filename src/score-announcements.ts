@@ -1,4 +1,3 @@
-import { publicBoard } from "./reconciliation";
 import { Database } from "bun:sqlite";
 import { finalizeEvent, nip19, SimplePool, type Event } from "nostr-tools";
 import { getCurrentPeriodId, getDateForPeriod, getGameNumberForPeriod, PERIOD_MS } from "./word5";
@@ -51,7 +50,11 @@ export class ScoreAnnouncer {
     if (now >= dueAt(period)) {
       this.db.transaction(() => {
         if (this.db.query(`SELECT 1 FROM ${table} WHERE period_id=?`).get(period)) return;
-        const rows=publicBoard(this.db,noon?ROLLING_PERIODS:1,Math.min(now,(period+1)*PERIOD_MS-1)).rows.slice(0,10);
+        const rows = this.db.query(`SELECT pubkey, SUM(points) AS points, COUNT(*) AS games,
+          SUM(CASE WHEN result!='X' THEN 1 ELSE 0 END) AS wins
+          FROM game_submissions WHERE period_id BETWEEN ? AND ? AND verified_completion=1 AND published_at IS NOT NULL
+          GROUP BY pubkey ORDER BY points DESC, wins DESC, games DESC, pubkey ASC LIMIT 10`)
+          .all(noon ? period - ROLLING_PERIODS + 1 : period, period) as { pubkey: string; points: number; games: number; wins: number }[];
         const event = rows.length ? finalizeEvent({ kind: 1, created_at: Math.floor(now / 1000),
           tags: [["t", "word5"], ["game", "word5"], ["period", String(period)],
             ["puzzle", String(getGameNumberForPeriod(period))], ["date", getDateForPeriod(period)],

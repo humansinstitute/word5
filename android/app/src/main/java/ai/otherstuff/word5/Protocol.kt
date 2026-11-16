@@ -81,7 +81,7 @@ object Codec {
             val through = b.longValue("through"); val p = b.longValue("played"); val w = b.longValue("won"); val s = b.longValue("streak"); val m = b.longValue("maxStreak")
             val last = if (b.isNull("lastPeriod")) null else b.longValue("lastPeriod")
             val result = if (b.isNull("todayResult")) null else b.getString("todayResult")
-            require(through in 0..Rules.period() && p in 0..100000 && w in 0..p && s in 0..w && m in s..100000 && (last == null || last in 0..through) && (result == null || result in listOf("1","2","3","4","5","6","X")))
+            require(through in 0..Rules.period() && p in 0..100000 && w in 0..p && s in 0..w && m in s..w && (last == null || last in 0..through) && (result == null || result in listOf("1","2","3","4","5","6","X")))
             val periods = b.getJSONArray("covered"); require(periods.length() <= 10000)
             val covered = (0 until periods.length()).map { i -> val n = periods.get(i); require(n is Number && n.toDouble() == n.toLong().toDouble() && n.toLong() in 0..through); n.toLong() }
             require(covered.size == covered.toSet().size)

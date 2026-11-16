@@ -3,9 +3,9 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';import {tmpdir} from 'node:os';
 import {generateSecretKey,getPublicKey,finalizeEvent} from 'nostr-tools';
 import {Word5Service,getDateForPeriod,getWordForPeriod} from '../src/word5';
-import {ReconciliationOperator,activateReviewedMigration,type OperatorConfig} from '../src/reconciliation-operator';
-import {playerReport} from '../src/reconciliation';
-import {sha256,type MigrationInput} from '../src/reconciliation-migration';
+import {ReconciliationOperator,activateReviewedMigration,type OperatorConfig} from '../src/reconciliation-runtime/reconciliation-operator';
+import {playerReport} from '../src/reconciliation-runtime/reconciliation';
+import {sha256,type MigrationInput} from '../src/reconciliation-runtime/reconciliation-migration';
 function fixture(legacy=false){
  const root=mkdtempSync(join(tmpdir(),'word5-ops-'));mkdirSync(join(root,'assets'));writeFileSync(join(root,'assets/answers.txt'),'apple\nbrave\ncrane\n');
  const path=join(root,'live.sqlite'),service=new Word5Service({rootDir:root,dbPath:path,relays:[],gamestrRelays:[]}),key=generateSecretKey(),operator=generateSecretKey(),pk=getPublicKey(key),actor=getPublicKey(operator),cutoff=Math.floor(Date.now()/1000)-2,period=Math.floor(cutoff/86400);
