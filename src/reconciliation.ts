@@ -21,6 +21,11 @@ export function initReconciliation(db:Database) {
     CREATE TABLE IF NOT EXISTS reconciliation_snapshot_imports(batch_id TEXT NOT NULL,event_id TEXT NOT NULL,PRIMARY KEY(batch_id,event_id));
     CREATE TABLE IF NOT EXISTS reconciliation_imports(batch_id TEXT NOT NULL,event_id TEXT NOT NULL,PRIMARY KEY(batch_id,event_id));`);
 }
+/** Receipt cutoff also works on pre-upgrade rows; signed creation alone is not receipt time. */
+export function completionReceiptExpression(db:Database) {
+  const columns=db.query('PRAGMA table_info(game_submissions)').all() as {name:string}[];
+  return columns.some(c=>c.name==='accepted_at')?"COALESCE(g.observed_at_ms,CAST(strftime('%s',g.accepted_at) AS INTEGER)*1000,r.created_at*1000)":"COALESCE(g.observed_at_ms,r.created_at*1000)";
+}
 /** All public evidence survives. Ambiguous legacy outcomes are excluded pending review. */
 export function acceptedOutcomes(db:Database, now=Date.now(), publicOnly=false) {
   const current=Math.floor(now/86400000), groups=new Map<string,any[]>(), conflicts:any[]=[];
@@ -33,7 +38,7 @@ export function acceptedOutcomes(db:Database, now=Date.now(), publicOnly=false) 
   }
   const verified=(db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='game_submissions'").get() ? db.query(`SELECT g.event_id AS eventId,g.pubkey,g.period_id AS periodId,g.result,r.created_at AS createdAt,
     g.published_at AS publishedAt,g.public_event_id AS publicEventId,g.completion_basis AS completionBasis FROM game_submissions g JOIN raw_events r ON r.event_id=g.event_id
-    WHERE g.verified_completion=1 AND g.period_id<=? AND r.created_at<=? AND (g.observed_at_ms IS NULL OR g.observed_at_ms<=?)`).all(current,Math.floor(now/1000),now) : []) as any[];
+    WHERE g.verified_completion=1 AND g.period_id<=? AND r.created_at<=? AND ${completionReceiptExpression(db)}<=?`).all(current,Math.floor(now/1000),now) : []) as any[];
   const verifiedMap=new Map(verified.filter(r=>!publicOnly||(r.publishedAt&&r.publicEventId)).map(r=>[`${r.pubkey}:${r.periodId}`,r]));
   const outcomes:Outcome[]=[];
   for(const key of new Set([...groups.keys(),...verifiedMap.keys()])) {

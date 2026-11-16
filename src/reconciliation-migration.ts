@@ -1,15 +1,17 @@
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { SocialHistory, normalizePublicScoreEvent } from './social-history';
-import { acceptedOutcomes, baselineProposal, bestDecision, playerReport, CONTRACT, initReconciliation } from './reconciliation';
+import { acceptedOutcomes, completionReceiptExpression, baselineProposal, bestDecision, playerReport, CONTRACT, initReconciliation } from './reconciliation';
 import {getEventHash,verifyEvent,type Event} from 'nostr-tools';
 export const sha256=(s:string|Uint8Array)=>createHash('sha256').update(s).digest('hex');
 export type Decision={decisionId:string;pubkey:string;maxStreak:number;sourceEventId:string|null;provenance:string;reason:string;effectiveAt:number;actor:string;reviewedAt:number;supersedes:string|null};
-export type MigrationInput={cutoff:number;events:Event[];decisions:Decision[];correctionReviews?:{eventId:string;reason:string;actor:string;reviewedAt:number}[]};
+export type MigrationInput={cutoff:number;events:Event[];decisions:Decision[];correctionReviews?:{eventId:string;reason:string;actor:string;reviewedAt:number}[];preservedPublicBests?:{pubkey:string;maxStreak:number;sourceEventId:string|null;sourceSnapshotSha256:string;capturedAt:number}[]};
 export function validateInput(input:MigrationInput) {
   if(!Number.isSafeInteger(input.cutoff)||input.cutoff<0)throw new Error('Invalid fixed cutoff');
   const seen=new Set<string>();
   for(const e of input.events){normalizePublicScoreEvent(e,'reconciliation');if(e.created_at>input.cutoff)throw new Error('Event after cutoff');if(seen.has(e.id))throw new Error('Duplicate input event');seen.add(e.id);}
+  for(const floor of input.preservedPublicBests||[])if(!/^[0-9a-f]{64}$/.test(floor.pubkey)||!Number.isSafeInteger(floor.maxStreak)||floor.maxStreak<0||!/^[0-9a-f]{64}$/.test(floor.sourceSnapshotSha256)||!Number.isSafeInteger(floor.capturedAt)||floor.capturedAt<0||floor.capturedAt>input.cutoff)throw new Error('Invalid preserved public baseline');
+
   for(const d of input.decisions){
     if(!/^[0-9a-f]{64}$/.test(d.actor)||!Number.isSafeInteger(d.reviewedAt)||d.reviewedAt<0||d.reviewedAt>input.cutoff||!/^[0-9a-f]{64}$/.test(d.pubkey)||!Number.isSafeInteger(d.maxStreak)||d.maxStreak<0||!d.reason||!d.provenance||!d.decisionId||!Number.isSafeInteger(d.effectiveAt)||d.effectiveAt>input.cutoff)throw new Error('Invalid reviewed decision');
     if(d.provenance==='self-published'&&!d.sourceEventId)throw new Error('Self-published decision requires evidence');
@@ -18,7 +20,7 @@ export function validateInput(input:MigrationInput) {
 export function manifest(db:Database,input:MigrationInput) {
   validateInput(input);initReconciliation(db);
   const history=new SocialHistory(db),now=input.cutoff*1000;
-  const players=[...new Set([...input.events.map(e=>e.pubkey),...input.decisions.map(d=>d.pubkey),...(db.query('SELECT DISTINCT pubkey FROM game_submissions WHERE observed_at_ms IS NULL OR observed_at_ms<=?').all(now) as any[]).map(r=>r.pubkey)])].sort();
+  const players=[...new Set([...input.events.map(e=>e.pubkey),...input.decisions.map(d=>d.pubkey),...(db.query(`SELECT DISTINCT g.pubkey FROM game_submissions g LEFT JOIN raw_events r ON r.event_id=g.event_id WHERE ${completionReceiptExpression(db)}<=?`).all(now) as any[]).map(r=>r.pubkey)])].sort();
   const before=acceptedOutcomes(db,now);
   const publicBeforeProjection=acceptedOutcomes(db,now,true);
   const publicBefore=new Map(players.map(pk=>[pk,playerReport(db,pk,now,true,true,publicBeforeProjection)]));
@@ -54,14 +56,19 @@ export function manifest(db:Database,input:MigrationInput) {
   const after=acceptedOutcomes(db,now);
   const summary=(rows:any[],pk:string)=>{const games=rows.filter(r=>r.pubkey===pk);let run=0,best=0,last:number|null=null;for(const r of games){run=r.result==='X'?0:last===r.periodId-1?run+1:1;best=Math.max(best,run);last=r.periodId;}return {games:games.length,wins:games.filter(r=>r.result!=='X').length,points:games.reduce((s,r)=>s+r.points,0),demonstratedBest:best};};
   const publicAfterProjection=acceptedOutcomes(db,now,true);
-  return {contract:CONTRACT,cutoff:input.cutoff,inputSha256:sha256(JSON.stringify(input)),insertedEventIds:added,insertedDecisionIds:input.decisions.map(d=>d.decisionId).filter(id=>!decisionsBefore.has(id)),insertedAnchorIds:(input.correctionReviews||[]).map(r=>r.eventId).filter(id=>!anchorsBefore.has(id)),insertedSnapshotIds:(db.query('SELECT event_id AS id FROM player_stats_snapshots ORDER BY event_id').all() as any[]).map(r=>r.id).filter(id=>!snapshotsBefore.has(id)),existingEvents:input.events.filter(e=>existing.has(e.id)).length,
-    serverVerifiedRowsPreserved:db.query('SELECT COUNT(*) AS count FROM game_submissions WHERE verified_completion=1 AND (observed_at_ms IS NULL OR observed_at_ms<=?)').get(now),
+  const lifetimePreservation={compared:(input.preservedPublicBests||[]).length,unexpectedDrops:(input.preservedPublicBests||[]).filter(floor=>{
+    const after=bestDecision(db,floor.pubkey,now);const before=beforeBest.get(floor.pubkey);
+    return (!after||after.maxStreak<floor.maxStreak)&&!input.decisions.some(d=>d.pubkey===floor.pubkey&&before&&d.supersedes===before.decisionId);
+  })};
+  if(lifetimePreservation.unexpectedDrops.length)throw new Error('Existing published lifetime best would decrease without reviewed supersession');
+  return {contract:CONTRACT,lifetimePreservation,previousPublishedBests:input.preservedPublicBests||[],cutoff:input.cutoff,inputSha256:sha256(JSON.stringify(input)),insertedEventIds:added,insertedDecisionIds:input.decisions.map(d=>d.decisionId).filter(id=>!decisionsBefore.has(id)),insertedAnchorIds:(input.correctionReviews||[]).map(r=>r.eventId).filter(id=>!anchorsBefore.has(id)),insertedSnapshotIds:(db.query('SELECT event_id AS id FROM player_stats_snapshots ORDER BY event_id').all() as any[]).map(r=>r.id).filter(id=>!snapshotsBefore.has(id)),existingEvents:input.events.filter(e=>existing.has(e.id)).length,
+    serverVerifiedRowsPreserved:db.query(`SELECT COUNT(*) AS count FROM game_submissions g LEFT JOIN raw_events r ON r.event_id=g.event_id WHERE verified_completion=1 AND ${completionReceiptExpression(db)}<=?`).get(now),
     players:players.map(pubkey=>({pubkey,publicBefore:publicBefore.get(pubkey),publicAfter:playerReport(db,pubkey,now,true,true,publicAfterProjection),before:{...summary(before.outcomes,pubkey),report:beforeReports.get(pubkey),acceptedLifetimeBest:beforeBest.get(pubkey)},after:{...summary(after.outcomes,pubkey),report:playerReport(db,pubkey,now,true,false,after),acceptedLifetimeBest:bestDecision(db,pubkey,now)},proposal:baselineProposal(db.query(`SELECT event_id AS eventId,created_at AS createdAt,event_type AS eventType,streak,max_streak AS maxStreak FROM public_score_history WHERE pubkey=?`).all(pubkey),now)})),conflicts:after.conflicts};
 }
 /** Preview executes on a disposable copy. Apply checks the exact reviewed before/after manifest inside one transaction. */
 export function applyMigration(db:Database,input:MigrationInput,reviewed:any,batchId:string) {
-  initReconciliation(db);
   return db.transaction(()=>{
+    initReconciliation(db);
     const old=db.query('SELECT input_sha256,manifest_json,rolled_back_at FROM reconciliation_batches WHERE batch_id=?').get(batchId) as any;
     if(old){if(old.input_sha256!==sha256(JSON.stringify(input))||old.rolled_back_at)throw new Error('Batch identity mismatch or rolled back');return JSON.parse(old.manifest_json);}
     const result=manifest(db,input);
@@ -74,12 +81,12 @@ export function applyMigration(db:Database,input:MigrationInput,reviewed:any,bat
     return result;
   })();
 }
-/** Revoke decisions and remove only this batch's imported public projection, never raw evidence or completions. */
+/** Reverse imported projections and optional anchors; preserve accepted lifetime floors, raw evidence and new completions. */
 export function rollbackMigration(db:Database,batchId:string) {
   return db.transaction(()=>{
     const batch=db.query('SELECT * FROM reconciliation_batches WHERE batch_id=?').get(batchId) as any;
     if(!batch)throw new Error('Unknown batch');if(batch.rolled_back_at)return;
-    db.query(`UPDATE lifetime_best_decisions SET revoked_at=CURRENT_TIMESTAMP WHERE batch_id=?`).run(batchId);
+    // Accepted lifetime floors survive rollback; lowering requires a separate reviewed superseding decision.
     db.query(`UPDATE reviewed_correction_anchors SET revoked_at=CURRENT_TIMESTAMP WHERE batch_id=?`).run(batchId);
     db.query(`DELETE FROM player_stats_snapshots WHERE event_id IN(SELECT event_id FROM reconciliation_snapshot_imports WHERE batch_id=?)
       AND event_id NOT IN(SELECT public_event_id FROM game_submissions WHERE public_event_id IS NOT NULL)`).run(batchId);

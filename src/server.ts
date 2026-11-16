@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { NativeBackup, backupRequest, BackupError } from "./native-backup";
 import { DailyChat } from "./chat";
-import { ReconciliationSnapshot, snapshotRequest } from "./reconciliation-snapshot";
+import { ReconciliationOperator, activateReviewedMigration, operatorConfig } from "./reconciliation-operator";
 import { CONTRACT, comparisonBoard } from "./reconciliation";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
@@ -21,9 +21,13 @@ const GAMESTR_RELAYS = String(process.env.GAMESTR_RELAYS || "wss://main.relay.ga
   .map((relay) => relay.trim())
   .filter(Boolean);
 
+const DB_PATH=process.env.WORD5_DB_PATH || join(ROOT,"data","word5.sqlite");
+const migrationConfig=operatorConfig(DB_PATH,'active');
+if(process.env.WORD5_RECONCILIATION_REQUIRE_REVIEW==='1'&&!process.env.WORD5_RECONCILIATION_ACTIVATE_BATCH)throw new Error('Reviewed migration batch required before canonical activation');
+if(process.env.WORD5_RECONCILIATION_ACTIVATE_BATCH)activateReviewedMigration(DB_PATH,migrationConfig,process.env.WORD5_RECONCILIATION_ACTIVATE_BATCH);
 const service = new Word5Service({
   rootDir: ROOT,
-  dbPath: process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"),
+  dbPath: DB_PATH,
   word5Nsec: process.env.WORD5_NSEC,
   relays: RELAYS,
   gamestrRelays: GAMESTR_RELAYS,
@@ -44,9 +48,7 @@ async function catchUpSocialHistory() {
 setTimeout(() => void catchUpSocialHistory(), 1_000);
 setInterval(() => void catchUpSocialHistory(), 15 * 60 * 1000);
 const nativeBackup = service.secretKey ? new NativeBackup(service.db, service.secretKey, (pubkey) => service.playerHistory(pubkey, Date.now(), true)) : null;
-const reconciliationSnapshot = new ReconciliationSnapshot(service.db,
-  (process.env.WORD5_RECONCILIATION_OPERATORS||"").split(",").filter(p=>/^[0-9a-f]{64}$/.test(p)),
-  `${process.env.WORD5_PUBLIC_BASE || "https://otherstuff.ai/word5/"}api/reconciliation/snapshot`,process.env.WORD5_RECONCILIATION_INSTANCE||"");
+const reconciliationOperator=new ReconciliationOperator(service.db,migrationConfig);
 const chat = new DailyChat(service);
 // Purge expired room material at its retention deadline even without app traffic.
 setInterval(() => chat.prune(), 1000).unref();
@@ -145,11 +147,8 @@ const server = Bun.serve({
         try { return json({ event: await backupRequest(req, nativeBackup, process.env.WORD5_PUBLIC_BASE || "https://otherstuff.ai/word5/") }); }
         catch (error) { return json({ error: error instanceof BackupError ? error.message : "Backup request rejected" }, {status: error instanceof BackupError ? error.status : 400}); }
       }
-      if(url.pathname==="/api/reconciliation/snapshot" && req.method==="POST") {
-        try {
-          const snapshot=await snapshotRequest(req,reconciliationSnapshot);
-          return new Response(snapshot.bytes,{headers:{'content-type':'application/vnd.sqlite3','cache-control':'no-store','x-word5-sha256':snapshot.sha256,'x-word5-capture-started-at':String(snapshot.captureStartedAt),'x-word5-capture-finished-at':String(snapshot.captureFinishedAt)}});
-        }catch{return json({ok:false,error:'Snapshot unavailable or unauthorized'},{status:403});}
+      if(url.pathname.startsWith('/api/reconciliation/')&&req.method==='POST') {
+        try{return await reconciliationOperator.handle(req);}catch(error){return json({ok:false,error:error instanceof Error?error.message:'Operator request rejected'},{status:403});}
       }
       if (url.pathname === "/api/day") {
         return json(service.getDay());
