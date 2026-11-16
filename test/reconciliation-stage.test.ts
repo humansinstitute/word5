@@ -50,3 +50,10 @@ test('preserved live best cannot be lowered by a later conflicting public self-c
  const input={...f.input,events:[f.e,lower]};const preview=await(await f.call('preview',{input})).json();expect(preview.manifest.players[0].after.report.stats.maxStreak).toBe(7);expect(preview.manifest.players[0].proposal.reviewRequired).toBe(true);
  await expect(f.call('preview',{input:{...input,decisions:[]}})).rejects.toThrow('would decrease');f.service.db.close();
 });
+test('real broker-shaped five-tag NIP98 nonce/capability works while duplicate nonce is rejected',async()=>{
+ const f=fixture(),url=f.config.publicBase+'api/reconciliation/snapshot',raw=JSON.stringify({app:'word5',instance:f.config.instance});
+ const tags=[['u',url],['method','POST'],['payload',sha256(raw)],['nonce','a'.repeat(32)],['wm-session-capability','fixture-session','fixture-grant','fixture-proof']];
+ const request=(extra=false)=>{const event=finalizeEvent({kind:27235,created_at:Math.floor(Date.now()/1000),tags:extra?[...tags,['nonce',crypto.randomUUID()]]:tags,content:''},f.operator);return new Request(url,{method:'POST',headers:{authorization:'Nostr '+Buffer.from(JSON.stringify(event)).toString('base64')},body:raw});};
+ const result=await f.ops.handle(request());expect(result.status).toBe(200);expect(result.headers.get('x-word5-sha256')).toHaveLength(64);
+ await expect(f.ops.handle(request(true))).rejects.toThrow('authorization');f.service.db.close();
+});

@@ -19,8 +19,8 @@ export class ReconciliationSnapshot {
     const tags=new Map(event?.tags?.map(t=>[t[0],t[1]])||[]);
     if(!body||Object.keys(body).sort().join(',')!=='app,instance'||body.app!=='word5'||body.instance!==this.instance||
       !event||!this.operators.includes(event.pubkey)||!verifyEvent(event)||getEventHash(event)!==event.id||event.kind!==27235||event.content!==''||Math.abs(event.created_at-seconds)>60||
-      event.tags.length!==4||tags.size!==4||event.tags.some(t=>t.length!==2||!['u','method','payload','nonce'].includes(t[0]!))||
-      tags.get('u')!==this.url||tags.get('method')!=='POST'||tags.get('payload')!==hash(bytesIn)||!/^[0-9a-f-]{36}$/.test(tags.get('nonce')||''))throw new Error('Snapshot authorization rejected');
+      ![4,5].includes(event.tags.length)||tags.size!==event.tags.length||event.tags.some(t=>t[0]==='wm-session-capability'?(t.length!==4||t.slice(1).some(v=>typeof v!=='string'||!v.length||v.length>1024)):(t.length!==2||!['u','method','payload','nonce'].includes(t[0]!)))||
+      tags.get('u')!==this.url||tags.get('method')!=='POST'||tags.get('payload')!==hash(bytesIn)||!/^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.test(tags.get('nonce')||''))throw new Error('Snapshot authorization rejected');
     for(const [id,expires] of this.used)if(expires<seconds)this.used.delete(id);
     if(this.used.has(event.id)||this.used.size>=1000)throw new Error('Snapshot authorization rejected');this.used.set(event.id,seconds+120);
     const dir=mkdtempSync(join(tmpdir(),'word5-snapshot-'));const path=join(dir,'snapshot.sqlite');
