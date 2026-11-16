@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from "nostr-tools";
 import { SocialHistory } from "../src/social-history";
+import { publicBoard } from "../src/reconciliation";
 import { Word5Service } from "../src/word5";
 
 function database() {
@@ -37,6 +38,23 @@ function score(secret: Uint8Array, createdAt: number, puzzle: number, maxStreak:
 }
 
 describe("server-backed social history", () => {
+  test("historical windows use later known conflicts while retaining puzzle-day bounds", () => {
+    const history = new SocialHistory(database());
+    const secret = generateSecretKey();
+    const period = Math.floor(Date.now() / 86400000) - 3;
+    const first = score(secret, period * 86400 + 10, period % 1000, 1, { period, result: "2" });
+    history.archive(first);
+    const query = { authors: [first.pubkey], since: period * 86400, until: (period + 1) * 86400 - 1 };
+    expect(history.history(query).rows).toHaveLength(1);
+    history.archive(score(secret, (period + 1) * 86400 + 10, period % 1000, 1, { period, result: "X" }));
+    history.archive(score(secret, (period + 1) * 86400 + 20, (period + 1) % 1000, 1, { period: period + 1, result: "3" }));
+    expect(history.history(query).rows).toHaveLength(0);
+    const current = publicBoard(history.db, 7, Date.now(), [first.pubkey]);
+    expect(current.conflicts).toHaveLength(1);
+    expect(history.history({ ...query, until: (period + 2) * 86400 - 1 }).rows.map(row => row.periodId)).toEqual([period + 1]);
+    history.db.close();
+  });
+
   test("bootstraps the signed one-year seed idempotently and recovers Daniel at 114", () => {
     const rootDir = resolve(import.meta.dir, "..");
     const dbPath = join(mkdtempSync(join(tmpdir(), "word5-seed-")), "word5.sqlite");

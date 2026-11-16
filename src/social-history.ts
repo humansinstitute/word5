@@ -161,7 +161,8 @@ export class SocialHistory {
     const limit = query.limit ?? 500;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_HISTORY_LIMIT) throw new Error(`limit must be 1-${MAX_HISTORY_LIMIT}`);
     const authorClause = authors.length ? `AND pubkey IN (${authors.map(() => "?").join(",")})` : "";
-    const {outcomes,conflicts}=acceptedOutcomes(this.db,until*1000,true);
+    // Window bounds select puzzle days; later evidence still determines accepted outcomes.
+    const {outcomes,conflicts}=acceptedOutcomes(this.db,Date.now(),true);
     const startPeriod=Math.floor(since/86400),endPeriod=Math.floor(until/86400);
     const rows=outcomes.filter(r=>r.periodId>=startPeriod&&r.periodId<=endPeriod&&(!authors.length||authors.includes(r.pubkey)))
       .sort((a,b)=>b.periodId-a.periodId||a.pubkey.localeCompare(b.pubkey)).slice(0,limit)
