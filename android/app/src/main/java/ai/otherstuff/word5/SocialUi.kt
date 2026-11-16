@@ -86,7 +86,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
                 "Duels" -> {
                     if(m.owner.isEmpty())status="Sign in with Amber to compare with people you follow." else {
                         val authors=contactsOf(PublicNostr.contacts(m.owner));val now=nowSeconds()
-                        rows=duelRankings(PublicNostr.history(authors,now-400*86400,now),authors,now)
+                        rows=authors.distinct().chunked(100).flatMap { chunk -> PublicNostr.get("api/comparison?authors=${chunk.joinToString(",")}").optJSONArray("rows")?.objects().orEmpty() }.sortedWith(compareByDescending<JSONObject>{it.optInt("points")}.thenBy{it.optString("pubkey")})
                         if(authors.isEmpty())status="No contacts found. Follow some people to compare scores here."
                     }
                 }
@@ -115,9 +115,9 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
                 if(tab=="Top Scores") {
                     FlowRow(Modifier.fillMaxWidth().padding(horizontal=4.dp,vertical=10.dp),horizontalArrangement=Arrangement.Center,verticalArrangement=Arrangement.spacedBy(10.dp)) {
                         listOf(1,7,21).forEach{n->SocialPill("$n day${if(n==1)"" else "s"}",days==n,n==1,last=n==21){days=n}}
-                        Row(Modifier.clickable{published=!published}.padding(horizontal=8.dp,vertical=7.dp),verticalAlignment=Alignment.CenterVertically){Copy(if(published)"☑" else "☐",14,Purple);Copy("Posted to Nostr only",13,Color(0xFFDDDDDD),modifier=Modifier.padding(start=6.dp))}
+                        Copy("Public results only",13,Muted,modifier=Modifier.padding(horizontal=8.dp,vertical=7.dp))
                     }
-                    Copy("Server recorded scores from signed-in games. A signature identifies a player; it does not prove fair play.",12,Muted,modifier=Modifier.padding(horizontal=4.dp,vertical=12.dp))
+                    Copy("Public results only · UTC puzzle days. Historical player reports remain distinct from validated completions.",12,Muted,modifier=Modifier.padding(horizontal=4.dp,vertical=12.dp))
                 }
                 if(tab=="Duels"&&rows.isNotEmpty())DuelIntro()
                 if(tab=="League"&&m.owner.isNotEmpty())Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Copy("Your Leagues",16,bold=true);SocialAction("+ New",Purple){createLeague=true}}
@@ -176,7 +176,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
         Avatar(identity.avatar,identity.name,Modifier.size(40.dp))
         Column(Modifier.weight(1f)) {
             Text(identity.name,color=Color.White,fontSize=15.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis,fontFamily=WebFont)
-            val detail=when(tab){"Duels"->"${row.optInt("points")} pts in 21d · ${row.optInt("games")} recent games";"Top Streaks"->"${row.optInt("played")} played · ${if(row.optInt("played")==0)0 else kotlin.math.round(row.optInt("won")*100.0/row.optInt("played")).toInt()}% win";else->"${row.optInt("games")} games · ${row.optInt("wins")} wins · ${row.optInt("publishedGames")} posted"}
+            val detail=when(tab){"Duels"->"${row.optInt("points")} pts in 21d · ${row.optInt("games")} recent games";"Top Streaks"->"Lifetime best · ${row.optString("source")}";else->"${row.optInt("games")} games · ${row.optInt("wins")} wins · ${row.optInt("publishedGames")} posted"}
             Copy(detail,12,Muted)
             if(tab=="Duels")Copy("Last played ${relativeTime(row.optLong("lastPlayedAt"))}",12,Muted,modifier=Modifier.padding(top=3.dp))
         }
@@ -197,7 +197,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
 
 @Composable private fun ComparisonLoader(m:GameModel,opponent:String,profiles:Map<String,JSONObject>,onProfiles:(Map<String,JSONObject>)->Unit,close:()->Unit) {
     var rows by remember(m.owner,opponent){mutableStateOf(emptyList<JSONObject>())};var status by remember{mutableStateOf("Loading comparison…")};var retry by remember{mutableIntStateOf(0)}
-    LaunchedEffect(m.owner,opponent,retry){try{val now=nowSeconds();rows=PublicNostr.history(listOf(m.owner,opponent),now-21*86400,now);onProfiles(socialProfiles(listOf(m.owner,opponent)));status=""}catch(e:CancellationException){throw e}catch(e:Exception){status="Comparison unavailable: ${e.message}"}}
+    LaunchedEffect(m.owner,opponent,retry){try{val now=nowSeconds();rows=PublicNostr.history(listOf(m.owner,opponent),(now/86400-20)*86400,now);onProfiles(socialProfiles(listOf(m.owner,opponent)));status=""}catch(e:CancellationException){throw e}catch(e:Exception){status="Comparison unavailable: ${e.message}"}}
     if(status.isNotEmpty())Column(Modifier.fillMaxWidth().padding(16.dp)){SocialAction("Back to follows",onClick=close);Copy(status,14,Muted,modifier=Modifier.padding(vertical=24.dp));SocialAction("Retry"){retry++}}
     else {
         val left=socialIdentity(m.owner,profiles);val right=socialIdentity(opponent,profiles)

@@ -1,3 +1,10 @@
+## 1.0.7 (8)
+
+- Keep accepted lifetime bests separate from recovered game counts and current streaks.
+- Consume the shared server public-history contract for scores, duels and leagues.
+- Persist private completion retries independently of optional Nostr publication and encrypted backup; preserve account isolation and offline/rollover recovery.
+- Preserve accepted server lifetime floors while a local correction proposal awaits review.
+
 # 1.0.6
 
 Visit yesterday’s chat alongside today using simple navigation buttons. Each room keeps its own completion gate, draft, cached messages, scroll position and correctly dated result badges. Yesterday remains available before finishing today when its result was already verified. Rooms close after their day as yesterday; expired keys and local room state are removed. Today’s private-game validation still requires informed confirmation and never posts to Nostr. Existing native games, statistics, hard-mode settings and encrypted backup remain unchanged.

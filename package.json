@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "bun run src/server.ts",
-    "test": "node test/streak-reconstruction.test.js && bun test"
+    "test": "node test/streak-reconstruction.test.js && bun test ./test/*.test.ts"
   },
   "dependencies": {
     "nostr-tools": "^2.10.4"

@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { acceptedOutcomes, baselineProposal, bestDecision, playerReport, CONTRACT, initReconciliation } from "./reconciliation";
 import { existsSync, readFileSync } from "node:fs";
 import { getEventHash, SimplePool, validateEvent, verifyEvent, type Event } from "nostr-tools";
 
@@ -44,10 +45,10 @@ function integerTag(event: Event, name: string): number | null {
 
 function parsePuzzle(event: Event): number | null {
   const tagged = integerTag(event, "puzzle");
-  if (tagged && tagged > 0) return tagged;
+  if (tagged !== null) return tagged;
   const match = String(event.content || "").match(/WORD5\s*#(\d+)/i);
-  const value = match ? Number(match[1]) : 0;
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
+  const value = match ? Number(match[1]) : null;
+  return value !== null && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function parseResult(event: Event): string {
@@ -77,11 +78,11 @@ export function normalizePublicScoreEvent(event: Event, source = "relay", relays
   const streak = integerTag(event, "streak");
   const maxStreak = integerTag(event, "maxStreak");
   const completeStats = [played, won, streak, maxStreak].every((value) => value !== null);
-  const validStats = completeStats && won! <= played! && streak! <= maxStreak! && maxStreak! <= won!;
+  const validStats = completeStats && won! <= played! && streak! <= maxStreak! && streak! <= won! && maxStreak! <= 100000;
   if (eventType === "correction" && !validStats) throw new Error("Missing or invalid Word5 correction stats");
   const puzzle = parsePuzzle(event);
   const result = parseResult(event);
-  if (eventType === "score" && (!puzzle || !result)) throw new Error("Unsupported Word5 score format");
+  if (eventType === "score" && (puzzle === null || !result)) throw new Error("Unsupported Word5 score format");
   return {
     eventId: event.id, pubkey: event.pubkey, kind: event.kind, createdAt: event.created_at, eventType,
     puzzle, periodId: integerTag(event, "period"), result, points: eventType === "score" ? SCORE_BY_RESULT[result]! : null,
@@ -108,7 +109,7 @@ export function initSocialHistoryDb(db: Database): void {
 }
 
 export class SocialHistory {
-  constructor(readonly db: Database) { initSocialHistoryDb(db); }
+  constructor(readonly db: Database) { initSocialHistoryDb(db); initReconciliation(db); }
 
   archive(event: Event, source = "relay", relays: string[] = []): { inserted: boolean; row: ArchivedScore } {
     const row = normalizePublicScoreEvent(event, source, relays);
@@ -160,69 +161,79 @@ export class SocialHistory {
     const limit = query.limit ?? 500;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_HISTORY_LIMIT) throw new Error(`limit must be 1-${MAX_HISTORY_LIMIT}`);
     const authorClause = authors.length ? `AND pubkey IN (${authors.map(() => "?").join(",")})` : "";
-    const rows = this.db.query(`SELECT event_id AS eventId,pubkey,puzzle,period_id AS periodId,result,points,
-      created_at AS createdAt,source,relays_json AS relaysJson FROM public_score_history
-      WHERE event_type='score' AND created_at BETWEEN ? AND ? ${authorClause}
-      ORDER BY created_at DESC,event_id DESC LIMIT ?`).all(since, until, ...authors, limit) as Array<Record<string, unknown>>;
-    return { since, until, limit, rows: rows.map(({ relaysJson, ...row }) => ({ ...row, relays: JSON.parse(String(relaysJson)) })) };
+    const {outcomes,conflicts}=acceptedOutcomes(this.db,until*1000,true);
+    const startPeriod=Math.floor(since/86400),endPeriod=Math.floor(until/86400);
+    const rows=outcomes.filter(r=>r.periodId>=startPeriod&&r.periodId<=endPeriod&&(!authors.length||authors.includes(r.pubkey)))
+      .sort((a,b)=>b.periodId-a.periodId||a.pubkey.localeCompare(b.pubkey)).slice(0,limit)
+      .map(r=>({...r,puzzle:r.periodId%1000,relays:[]}));
+    return {contract:CONTRACT,visibility:'public-only',since,until,limit,rows,conflicts};
   }
 
-  topStreaks(limit = 50) {
+  topStreaks(limit = 50, now=Date.now()) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("limit must be 1-200");
-    const rows = this.db.query(`SELECT event_id AS eventId,pubkey,created_at AS createdAt,event_type AS eventType,
-      puzzle,played,won,streak,max_streak AS maxStreak,source,relays_json AS relaysJson
-      FROM public_score_history ORDER BY pubkey,created_at,event_id`).all() as Array<any>;
-    const byPlayer = new Map<string, any[]>();
-    for (const row of rows) byPlayer.set(row.pubkey, [...(byPlayer.get(row.pubkey) || []), row]);
-    const best: any[] = [];
-    for (const [pubkey, playerRows] of byPlayer) {
-      const corrections = playerRows.filter((row) => row.eventType === "correction" && row.maxStreak !== null)
-        .sort((a, b) => b.createdAt - a.createdAt || b.eventId.localeCompare(a.eventId));
-      const correction = corrections[0] || null;
-      const eligible = playerRows.filter((row) => {
-        if (row.maxStreak === null || row.maxStreak <= 0) return false;
-        if (!correction || row.eventType === "correction") return true;
-        if (row.createdAt < correction.createdAt) return false;
-        if (row.streak <= 0) return true;
-        const rowPuzzle = row.puzzle || Math.floor(row.createdAt / 86400) % 1000;
-        const correctionPuzzle = correction.puzzle || Math.floor(correction.createdAt / 86400) % 1000;
-        return row.streak <= correction.streak + (rowPuzzle - correctionPuzzle + 1000) % 1000 + 1;
-      }).sort((a, b) => b.maxStreak - a.maxStreak || b.createdAt - a.createdAt || b.eventId.localeCompare(a.eventId));
-      if (eligible[0]) best.push({ pubkey, ...eligible[0], latestCorrectionEventId: correction?.eventId || null,
-        relays: JSON.parse(eligible[0].relaysJson) });
+    const players=this.db.query("SELECT DISTINCT pubkey FROM public_score_history UNION SELECT pubkey FROM lifetime_best_decisions WHERE revoked_at IS NULL").all() as any[];
+    const projection=acceptedOutcomes(this.db,now,true);
+    const rows=players.map(({pubkey})=>{
+      const decision=bestDecision(this.db,pubkey,now);
+      const evidence=this.db.query(`SELECT event_id AS eventId,created_at AS createdAt,event_type AS eventType,streak,max_streak AS maxStreak FROM public_score_history WHERE pubkey=?`).all(pubkey) as any[];
+      const proposal=baselineProposal(evidence,now);
+      const report=playerReport(this.db,pubkey,now,false,true,projection);
+      return {pubkey,maxStreak:report.stats.maxStreak,played:report.stats.played,won:report.stats.won,streak:report.stats.streak,
+        baselineMaxStreak:decision?.maxStreak??null,source:report.stats.maxStreak>(decision?.maxStreak??0)?'reconciled-public-history':decision?.provenance??'recovered-public-sequence',eventId:decision?.sourceEventId??null,decisionId:decision?.decisionId??null,
+        proposedMaxStreak:proposal.candidate?.maxStreak??null,reviewRequired:!decision||proposal.reviewRequired||Boolean(proposal.candidate&&proposal.candidate.maxStreak!==decision.maxStreak&&proposal.candidate.eventId!==decision.sourceEventId),
+        latestCorrectionEventId:proposal.correction?.eventId??null,relays:[]};
+    }).filter(r=>r.maxStreak>0).sort((a,b)=>b.maxStreak-a.maxStreak||a.pubkey.localeCompare(b.pubkey));
+    return {contract:CONTRACT,visibility:'public-only',rows:rows.slice(0,limit)};
+  }
+
+  /** Explicit operator repair uses separate per-relay cursors and never rewinds normal catch-up. */
+  async repair(relays:string[],since:number,until:number,fetcher:RelayFetch=fetchRelayScores) {
+    if(!Number.isSafeInteger(since)||!Number.isSafeInteger(until)||since<0||until<since)throw new Error('Invalid repair bounds');
+    const results:any[]=[];
+    for(const relay of relays) {
+      const name=`repair:${relay}:${since}:${until}`;
+      const state=this.db.query('SELECT cursor_created_at AS cursor FROM social_history_sync_state WHERE name=?').get(name) as any;
+      const start=Math.max(since,state?state.cursor+1:since),end=Math.min(until,start+86400-1);
+      if(start>until){results.push({relay,status:'range-queried-retention-unknown'});continue;}
+      try {
+        const events=await fetcher([relay],start,end);
+        if(events.length>=5000){results.push({relay,start,end,status:'saturated-no-cursor-advance'});continue;}
+        let imported=0,rejected=0;
+        for(const event of events)try{if(event.created_at<start||event.created_at>end)throw new Error('outside repair range');if(this.archive(event,'historical-repair',[relay]).inserted)imported++;}catch{rejected++;}
+        this.db.query(`INSERT INTO social_history_sync_state(name,cursor_created_at) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET cursor_created_at=excluded.cursor_created_at,updated_at=CURRENT_TIMESTAMP`).run(name,end);
+        results.push({relay,start,end,imported,rejected,status:'window-queried-retention-unknown'});
+      }catch{results.push({relay,start,end,status:'failed-no-cursor-advance'});}
     }
-    best.sort((a, b) => b.maxStreak - a.maxStreak || a.pubkey.localeCompare(b.pubkey));
-    return { rows: best.slice(0, limit).map(({ relaysJson: _, eventType: __, ...row }) => row) };
+    return {since,until,results};
   }
 
   async catchUp(relays: string[], fetcher: RelayFetch = fetchRelayScores, now = Math.floor(Date.now() / 1000)) {
     if (!relays.length) return { fetched: 0, imported: 0, rejected: 0, cursor: null };
-    const state = this.db.query("SELECT cursor_created_at AS cursor FROM social_history_sync_state WHERE name='scores'").get() as { cursor: number } | null;
-    const newest = this.db.query("SELECT MAX(created_at) AS cursor FROM public_score_history").get() as { cursor: number | null };
-    const cursor = state?.cursor ?? newest.cursor ?? now - 7 * 86400;
-    const since = Math.max(0, cursor - 2 * 86400);
-    const events = await fetcher(relays, since, now);
-    let imported = 0, rejected = 0, maxSeen = cursor;
-    for (const event of events.slice(0, 5000)) {
+    let fetched=0,imported=0,rejected=0;const cursors:Record<string,number>={};
+    for(const relay of relays) {
+      const name=`scores:${relay}`;
+      const state=this.db.query("SELECT cursor_created_at AS cursor FROM social_history_sync_state WHERE name=?").get(name) as any;
+      const cursor=state?.cursor??now-7*86400;
+      // Bounded per-relay windows; failed fetches never advance another relay's cursor.
+      const since=Math.max(0,cursor-86400),until=Math.min(now,since+3*86400);
       try {
-        if (!Number.isSafeInteger(event.created_at) || event.created_at < since || event.created_at > now) throw new Error("Relay event outside catch-up window");
-        if (this.archive(event, "relay", []).inserted) imported++;
-        maxSeen = Math.max(maxSeen, event.created_at);
-      } catch { rejected++; }
+        const events=await fetcher([relay],since,until);fetched+=events.length;
+        if(events.length>=5000)continue; // retention/completeness unknown: do not skip a full page
+        for(const event of events)try {
+          if(event.created_at<since||event.created_at>until)throw new Error('outside window');
+          if(this.archive(event,'relay',[relay]).inserted)imported++;
+        }catch{rejected++;}
+        this.db.query(`INSERT INTO social_history_sync_state(name,cursor_created_at) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET cursor_created_at=MAX(cursor_created_at,excluded.cursor_created_at),updated_at=CURRENT_TIMESTAMP`).run(name,until);
+        cursors[relay]=until;
+      }catch{cursors[relay]=cursor;}
     }
-    this.db.query(`INSERT INTO social_history_sync_state(name,cursor_created_at,updated_at) VALUES('scores',?1,CURRENT_TIMESTAMP)
-      ON CONFLICT(name) DO UPDATE SET cursor_created_at=MAX(cursor_created_at,excluded.cursor_created_at),updated_at=CURRENT_TIMESTAMP`).run(maxSeen);
-    return { fetched: events.length, imported, rejected, cursor: maxSeen };
+    return {fetched,imported,rejected,cursors,coverage:'Relay completion does not establish retention; historical repair uses separate cursors.'};
   }
 }
 
 export async function fetchRelayScores(relays: string[], since: number, until: number): Promise<Event[]> {
   const pool = new SimplePool();
   try {
-    const [byTopic, byGame] = await Promise.all([
-      pool.querySync(relays, { kinds: [1, 5555], "#t": ["word5"], since, until, limit: 5000 }, { maxWait: 12_000 }),
-      pool.querySync(relays, { kinds: [1, 5555], "#game": ["word5"], since, until, limit: 5000 }, { maxWait: 12_000 }),
-    ]);
-    return [...new Map([...byTopic, ...byGame].map((event) => [event.id, event])).values()];
+    return await pool.querySync(relays, { kinds: [1,5555], "#t": ["word5"], since, until, limit:5000 }, {maxWait:12_000});
   } finally { pool.close(relays); }
 }

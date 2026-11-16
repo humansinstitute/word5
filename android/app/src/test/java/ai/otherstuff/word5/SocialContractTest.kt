@@ -12,10 +12,10 @@ class SocialContractTest {
         val input=row();val output=scoreHistory(listOf(input)).single()
         assertEquals(5,output.getInt("points"));assertEquals("publication",output.getString("source"));assertEquals("wss://relay.test",output.getJSONArray("relays").getString(0));assertEquals(input.toString(),output.toString())
     }
-    @Test fun latestPerAuthorAbsolutePeriodWinsWithoutCollapsingPuzzleRollover(){
+    @Test fun serverAcceptedRowsRetainAbsolutePeriodsWithoutClientLatestWins(){
         val old=row(period=19768);val first=row(period=20768,result="1",time=20768*86400L+1);val last=row(period=20768,result="6",time=20768*86400L+2)
-        val other=row(b,20768,"2");val result=scoreHistory(listOf(first,last,other,old,last))
-        assertEquals(3,result.size);assertEquals(1,result.first{it.getString("pubkey")==a&&historyPeriod(it)==20768L}.getInt("points"));assertTrue(result.any{historyPeriod(it)==19768L})
+        val other=row(b,20768,"2");val result=scoreHistory(listOf(first,other,old,first))
+        assertEquals(3,result.size);assertEquals(10,result.first{it.getString("pubkey")==a&&historyPeriod(it)==20768L}.getInt("points"));assertTrue(result.any{historyPeriod(it)==19768L})
     }
     @Test fun nullPeriodUsesPuzzleToRecoverPreviousDayAfterMidnightAndHandlesZero(){
         val legacy=row(period=20999,time=21000*86400L+60).put("periodId",JSONObject.NULL)
@@ -30,7 +30,7 @@ class SocialContractTest {
     @Test fun rankingUsesRecentPointsThenLastActivityAndRetainsInactiveParticipants(){
         val now=20770*86400L;val rows=listOf(row(a,20769,"2"),row(b,20768,"2"),row(c,20700,"1"),row("d".repeat(64),20769,"1"))
         val ranks=duelRankings(rows,listOf(a,b,c,"e".repeat(64)),now)
-        assertEquals(listOf(a,b,c),ranks.map{it.getString("pubkey")});assertEquals(0,ranks.last().getInt("games"));assertEquals(0,ranks.last().getInt("points"))
+        assertEquals(listOf(a,b),ranks.map{it.getString("pubkey")});assertEquals(1,ranks.last().getInt("games"));assertEquals(7,ranks.last().getInt("points"))
     }
     @Test fun leagueIncludesCreatorDedupeAndLatestDefinitionCanRemoveMember(){
         val e=leagueDefinition(a,100,"slug","Name","Desc","",listOf(b,b));assertEquals(listOf(a,b),leagueMembers(e))

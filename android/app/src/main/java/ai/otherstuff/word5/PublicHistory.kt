@@ -16,22 +16,19 @@ fun historyPeriod(row:JSONObject):Long {
     val puzzle=row.optInt("puzzle",-1)
     return if(puzzle in 0..999) day-Math.floorMod(day-puzzle,1000L) else day
 }
+/** Accepted server projection: clients render and total these rows; never resolve conflicting relay claims. */
 fun scoreHistory(rows:List<JSONObject>):List<JSONObject> = rows.filter {
-    it.optString("pubkey").matches(socialPubkey) && it.optLong("createdAt",-1)>=0 &&
-        it.optString("result").uppercase() in listOf("1","2","3","4","5","6","X") &&
-        it.optString("eventType","score")=="score"
-}.groupBy { it.getString("pubkey")+":"+historyPeriod(it) }.values.map {
-    it.maxWith(compareBy<JSONObject>{r->r.getLong("createdAt")}.thenBy{r->r.optString("eventId")})
-}.map { JSONObject(it.toString()).put("periodId",historyPeriod(it)).put("result",it.getString("result").uppercase()).put("points",resultPoints(it.getString("result"))) }
-    .sortedWith(compareByDescending<JSONObject>{historyPeriod(it)}.thenByDescending{it.getLong("createdAt")})
+    it.optString("pubkey").matches(socialPubkey) && it.has("periodId") && !it.isNull("periodId") &&
+        it.optString("eventType","score")=="score" && it.optString("result") in listOf("1","2","3","4","5","6","X")
+}.distinctBy { it.getString("pubkey")+":"+it.getLong("periodId") }
+    .sortedWith(compareByDescending<JSONObject>{it.getLong("periodId")}.thenBy{it.getString("pubkey")})
 
 fun duelRankings(rows:List<JSONObject>,authors:List<String>,now:Long):List<JSONObject> = scoreHistory(rows).filter {
-    it.optString("pubkey") in authors && it.getLong("createdAt")<=now
+    it.optString("pubkey") in authors && historyPeriod(it) in (now/86400-20)..(now/86400)
 }.groupBy{it.getString("pubkey")}.map{(pk,games)->
-    val recent=games.filter{it.getLong("createdAt")>=now-21*86400}
-    JSONObject().put("pubkey",pk).put("games",recent.size).put("points",recent.sumOf{it.getInt("points")})
+    JSONObject().put("pubkey",pk).put("games",games.size).put("points",games.sumOf{it.getInt("points")})
         .put("lastPlayedAt",games.maxOf{it.getLong("createdAt")})
-}.sortedWith(compareByDescending<JSONObject>{it.getInt("games")>0}.thenByDescending{it.getInt("points")}.thenByDescending{it.getLong("lastPlayedAt")}.thenBy{it.getString("pubkey")})
+}.sortedWith(compareByDescending<JSONObject>{it.getInt("points")}.thenBy{it.getString("pubkey")})
 
 data class SocialIdentity(val pubkey:String,val name:String,val handle:String,val avatar:String)
 fun socialIdentity(pk:String,profiles:Map<String,JSONObject>):SocialIdentity {

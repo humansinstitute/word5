@@ -1,8 +1,9 @@
-import { ReconciliationOperator, operatorConfig } from "./reconciliation-runtime/reconciliation-operator";
 import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { NativeBackup, backupRequest, BackupError } from "./native-backup";
 import { DailyChat } from "./chat";
+import { ReconciliationOperator, activateReviewedMigration, operatorConfig } from "./reconciliation-operator";
+import { CONTRACT, comparisonBoard } from "./reconciliation";
 import { Word5Service } from "./word5";
 import { VisitTracker } from "./visits";
 import { VisitAnnouncer } from "./visit-announcements";
@@ -20,9 +21,13 @@ const GAMESTR_RELAYS = String(process.env.GAMESTR_RELAYS || "wss://main.relay.ga
   .map((relay) => relay.trim())
   .filter(Boolean);
 
+const DB_PATH=process.env.WORD5_DB_PATH || join(ROOT,"data","word5.sqlite");
+const migrationConfig=operatorConfig(DB_PATH,'active');
+if(process.env.WORD5_RECONCILIATION_REQUIRE_REVIEW==='1'&&!process.env.WORD5_RECONCILIATION_ACTIVATE_BATCH)throw new Error('Reviewed migration batch required before canonical activation');
+if(process.env.WORD5_RECONCILIATION_ACTIVATE_BATCH)activateReviewedMigration(DB_PATH,migrationConfig,process.env.WORD5_RECONCILIATION_ACTIVATE_BATCH);
 const service = new Word5Service({
   rootDir: ROOT,
-  dbPath: process.env.WORD5_DB_PATH || join(ROOT, "data", "word5.sqlite"),
+  dbPath: DB_PATH,
   word5Nsec: process.env.WORD5_NSEC,
   relays: RELAYS,
   gamestrRelays: GAMESTR_RELAYS,
@@ -43,9 +48,7 @@ async function catchUpSocialHistory() {
 setTimeout(() => void catchUpSocialHistory(), 1_000);
 setInterval(() => void catchUpSocialHistory(), 15 * 60 * 1000);
 const nativeBackup = service.secretKey ? new NativeBackup(service.db, service.secretKey, (pubkey) => service.playerHistory(pubkey, Date.now(), true)) : null;
-// Snapshot stage: existing game truth, publishers and assets retain their exact prior behavior.
-const stageDbPath=process.env.WORD5_DB_PATH||join(ROOT,"data","word5.sqlite");
-const reconciliationOperator=new ReconciliationOperator(service.db,{...operatorConfig(stageDbPath,'stage'),legacyPublicBests:()=>service.socialHistory.topStreaks(200).rows});
+const reconciliationOperator=new ReconciliationOperator(service.db,migrationConfig);
 const chat = new DailyChat(service);
 // Purge expired room material at its retention deadline even without app traffic.
 setInterval(() => chat.prune(), 1000).unref();
@@ -135,7 +138,7 @@ const server = Bun.serve({
       // Page loads and API access also discard expired rooms for anonymous visitors.
       if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/api/")) chat.prune();
       if (url.pathname === "/api/health") {
-        return json({ ok: true, app: "word5-server", reconciliationStage:"snapshot-only", operatorProtocol:"word5.reviewed-migration.v1", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261116-1", scoreRecap: scoreAnnouncer.status(),
+        return json({ ok: true, app: "word5-server", calculationContract:CONTRACT,reconciliationBuild:"20261116-1", time: new Date().toISOString(), dailyChat: "word5.chat.v1", dailyChatBuild: "20261116-1", scoreRecap: scoreAnnouncer.status(),
           publicData: publicDataPublisher.status(),
           socialHistory: { seed: service.bootstrapResult, catchUp: socialHistoryCatchUp } });
       }
@@ -207,7 +210,15 @@ const server = Bun.serve({
         return json(service.socialHistory.history({ authors, since: parseInteger("since"), until: parseInteger("until"), limit: parseInteger("limit") }));
       }
       if (url.pathname === "/api/player-history" && req.method === "GET") {
-        return json(service.playerHistory(url.searchParams.get("pubkey") || ""));
+        return json(service.publicPlayerHistory(url.searchParams.get("pubkey") || ""));
+      }
+      if (url.pathname === "/api/player-history" && req.method === "POST") {
+        return json(service.authenticatedHistory((await readJson(req))?.event));
+      }
+      if (url.pathname === "/api/comparison" && req.method === "GET") {
+        const authors=(url.searchParams.get("authors")||"").split(",").filter(Boolean);
+        if(authors.length>100||authors.some(a=>!/^[0-9a-f]{64}$/.test(a)))throw new Error("Invalid authors");
+        return json(comparisonBoard(service.db,authors));
       }
       if (url.pathname === "/api/top-streaks" && req.method === "GET") {
         const limitText = url.searchParams.get("limit") || "50";

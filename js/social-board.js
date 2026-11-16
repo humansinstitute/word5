@@ -306,11 +306,12 @@ function getWord5ResultScore(result) {
 }
 
 function parseWord5Event(event) {
-  if (event?.eventId && event?.pubkey && Number.isFinite(event?.createdAt) && event?.puzzle && event?.result) {
+  if (event?.eventId && event?.pubkey && Number.isFinite(event?.createdAt) && Number.isInteger(event?.periodId) && event?.result) {
     return {
       eventId: event.eventId,
       pubkey: event.pubkey,
       puzzle: Number(event.puzzle),
+      periodId: Number(event.periodId),
       result: String(event.result).toUpperCase(),
       points: Number(event.points) || 0,
       createdAt: Number(event.createdAt),
@@ -355,17 +356,17 @@ function parseWord5Event(event) {
 }
 
 function buildScoreMap(events, windowDays, allowedAuthors = null) {
-  const cutoff = Math.floor(Date.now() / 1000) - windowDays * 24 * 60 * 60;
+  const cutoff = Math.floor(Date.now() / 86400000) - windowDays + 1;
   const latestByPuzzle = new Map();
 
   for (const event of events || []) {
-    if (Number(event.created_at ?? event.createdAt) < cutoff) continue;
+    if (!Number.isInteger(event.periodId) || event.periodId < cutoff) continue;
     if (allowedAuthors && !allowedAuthors.has(event.pubkey)) continue;
 
     const parsed = parseWord5Event(event);
     if (!parsed) continue;
 
-    const key = `${parsed.pubkey}:${parsed.puzzle}`;
+    const key = `${parsed.pubkey}:${parsed.periodId}`;
     const existing = latestByPuzzle.get(key);
     if (!existing || parsed.createdAt > existing.createdAt) {
       latestByPuzzle.set(key, parsed);
@@ -400,7 +401,9 @@ async function fetchArchivedScoreHistory(authors, since, until, limit = 2000) {
     if (chunk.length) params.set("authors", chunk.join(","));
     const response = await fetch(`api/social-history?${params}`);
     if (!response.ok) throw new Error(`Social history API returned ${response.status}`);
-    const rows = (await response.json()).rows || [];
+    const report=await response.json();
+    if(report.contract!=='word5.calculation.v1')throw new Error('Server calculation contract unavailable');
+    const rows = report.rows || [];
     if (rows.length >= limit) throw new Error("Social history response reached its safety limit");
     return rows;
   })));
@@ -784,33 +787,12 @@ async function subscribeToFollows() {
       return;
     }
 
-    const now = Math.floor(Date.now() / 1000);
-    const events = await fetchArchivedScoreHistory(followPubkeys, now - 400 * 86400, now);
-
-    const recentScoreMap = buildScoreMap(
-      events,
-      COMPARE_WINDOW_DAYS,
-      new Set(followPubkeys)
-    );
-    const allTimeScoreMap = buildScoreMap(events, 3650, new Set(followPubkeys));
-
-    const summaries = Array.from(allTimeScoreMap.entries())
-      .map(([pubkey, allEntries]) => {
-        const recentEntries = recentScoreMap.get(pubkey) || [];
-        const recentSummary = buildPlayerSummary(pubkey, recentEntries);
-        return {
-          ...recentSummary,
-          lastPlayedAt: allEntries[0]?.createdAt || 0,
-          allTimeGamesPlayed: allEntries.length,
-        };
-      })
-      .sort((a, b) => {
-        const aRecent = a.gamesPlayed > 0 ? 1 : 0;
-        const bRecent = b.gamesPlayed > 0 ? 1 : 0;
-        if (bRecent !== aRecent) return bRecent - aRecent;
-        if (b.score !== a.score) return b.score - a.score;
-        return b.lastPlayedAt - a.lastPlayedAt;
-      });
+    const batches=await Promise.all(Array.from({length:Math.ceil(followPubkeys.length/100)},(_,i)=>followPubkeys.slice(i*100,i*100+100)).map(async authors=>{
+      const response=await fetch(`api/comparison?authors=${authors.join(',')}`,{cache:'no-store'});
+      const report=await response.json();if(!response.ok||report.contract!=='word5.calculation.v1')throw new Error('Server comparison contract unavailable');return report.rows;
+    }));
+    const summaries=batches.flat().sort((a,b)=>b.points-a.points||b.wins-a.wins||b.games-a.games||a.pubkey.localeCompare(b.pubkey))
+      .map(row=>({pubkey:row.pubkey,score:row.points,gamesPlayed:row.games,entries:[],lastPlayedAt:row.lastPlayedAt,allTimeGamesPlayed:row.allTimeGames}));
 
     if (summaries.length === 0) {
       showEmptyState("No published WORD5 results from your follows yet.");
@@ -1373,7 +1355,7 @@ async function loadCompareView({ leftPubkey, rightPubkey, updateHistory = true }
   try {
     const now = Math.floor(Date.now() / 1000);
     const events = await fetchArchivedScoreHistory(
-      [leftPubkey, rightPubkey], now - COMPARE_WINDOW_DAYS * 86400, now
+      [leftPubkey, rightPubkey], (Math.floor(now/86400)-COMPARE_WINDOW_DAYS+1)*86400, now
     );
 
     await loadProfiles([leftPubkey, rightPubkey]);
@@ -1509,7 +1491,7 @@ async function renderLeaderboardEntry(event, rank) {
     <div class="lb-avatar">${renderAvatarHtml(identity.avatar)}</div>
     <div class="lb-info">
       <div class="lb-name">${escapeHtml(identity.name)}</div>
-      <div class="lb-stats">${played} played · ${winPct}% win</div>
+      <div class="lb-stats">Lifetime best · ${escapeHtml(event.source || "recovered sequence")}</div>
     </div>
     <div class="lb-streak">
       <div class="lb-streak-value">${maxStreak}</div>
@@ -1568,7 +1550,7 @@ async function displayLeaderboard(events) {
 }
 
 let scoreDays = 7;
-let scorePublishedOnly = false;
+let scorePublishedOnly = true;
 
 async function subscribeToScores() {
   currentCompareState = null;
@@ -1584,19 +1566,15 @@ async function subscribeToScores() {
     controls.innerHTML = [1, 7, 21].map((days) =>
       `<button class="social-sub-btn${scoreDays === days ? " active" : ""}" data-days="${days}">${days} day${days === 1 ? "" : "s"}</button>`
     ).join("") + `<label style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-size:13px;color:#ddd">
-      <input type="checkbox" id="publishedScoresOnly" ${scorePublishedOnly ? "checked" : ""}> Posted to Nostr only</label>`;
+      Public results only</label>`;
     postList.appendChild(controls);
     controls.querySelectorAll("[data-days]").forEach((button) => button.addEventListener("click", () => {
       scoreDays = Number(button.dataset.days);
       void subscribeToScores();
     }));
-    controls.querySelector("#publishedScoresOnly").addEventListener("change", (event) => {
-      scorePublishedOnly = event.target.checked;
-      void subscribeToScores();
-    });
     const note = document.createElement("p");
     note.style.cssText = "color:#818384;font-size:12px;margin:12px 4px";
-    note.textContent = "Server recorded scores from signed-in games. A signature identifies a player; it does not prove fair play.";
+    note.textContent = "Public results only · UTC puzzle days. Historical player reports remain distinct from validated completions.";
     postList.appendChild(note);
     if (!rows.length) {
       const empty = document.createElement("div");

@@ -5,17 +5,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScoreAnnouncer, recapDueAt, startScoreAnnouncements, MAX_RECAP_ATTEMPTS, noonRecapDueAt } from "../src/score-announcements";
+import { initSocialHistoryDb } from "../src/social-history";
 import { getCurrentPeriodId } from "../src/word5";
 const now = Date.parse("2026-10-02T00:21:00Z");
 const period = getCurrentPeriodId(now) - 1;
 const key = new Uint8Array(32).fill(1); // synthetic test signer only
 function setup(path = ":memory:") {
   const db = new Database(path);
-  db.exec(`CREATE TABLE game_submissions (pubkey TEXT,period_id INTEGER,points INTEGER,result TEXT,verified_completion INTEGER,published_at TEXT)`);
+  db.exec(`CREATE TABLE raw_events(event_id TEXT PRIMARY KEY,pubkey TEXT,kind INTEGER,created_at INTEGER,event_json TEXT);
+    CREATE TABLE game_submissions(event_id TEXT,pubkey TEXT,period_id INTEGER,points INTEGER,result TEXT,verified_completion INTEGER,published_at TEXT,public_event_id TEXT,completion_basis TEXT DEFAULT 'server-observed-current-period',observed_at_ms INTEGER)`);
+  initSocialHistoryDb(db);
   return db;
 }
 function add(db: Database, n: number, points = 10, p = period, verified = 1, published: string | null = "yes", result = "1") {
-  db.query("INSERT INTO game_submissions VALUES (?,?,?,?,?,?)").run(n.toString(16).padStart(64, "0"), p, points, result, verified, published);
+  const id=`${n}-${p}-${db.query('SELECT COUNT(*) AS n FROM game_submissions').get().n}`;
+  db.query("INSERT INTO raw_events VALUES(?,?,30078,?,'{}')").run(id,n.toString(16).padStart(64,"0"),p*86400+1);
+  db.query("INSERT INTO game_submissions(event_id,pubkey,period_id,points,result,verified_completion,published_at,public_event_id) VALUES (?,?,?,?,?,?,?,?)").run(id,n.toString(16).padStart(64,"0"),p,points,result,verified,published,published?id+'-public':null);
 }
 test("UTC boundary and exact scheduler delay, with previous full period across month", async () => {
   const db = setup(); add(db, 1);
@@ -56,7 +61,7 @@ test("existing points/wins/games tie semantics aggregate unique accounts", async
   add(db, 3, 10); add(db, 3, 10);
   let event!: Event;
   await new ScoreAnnouncer(db,key,["mock"], async e => {event=e;return true;}).run(now);
-  expect(event.tags.filter(t=>t[0]==="p").map(t=>t[1])).toEqual([3,2,1].map(n=>n.toString(16).padStart(64,"0")));
+  expect(event.tags.filter(t=>t[0]==="p").map(t=>t[1])).toEqual([2,3,1].map(n=>n.toString(16).padStart(64,"0")));
   expect(event.content).toContain("top 3 publicly posted scores");
   expect(event.content).not.toContain("4. nostr:"); db.close();
 });
@@ -156,8 +161,8 @@ test("noon includes exactly 21 periods, aggregates and orders top ten with priva
   await new ScoreAnnouncer(db, key, ["mock"], async e => { events.push(e); return true; }).run(noon);
   const e = noonEvents(events)[0];
   expect(verifyEvent(e)).toBe(true);
-  expect(e.tags.filter(t => t[0] === "p").map(t => t[1])).toEqual([1,3,2,4,5,6,7,8,9,10].map(pubkey));
-  expect(e.content).toContain("210 points · 21 games · 20 wins");
+  expect(e.tags.filter(t => t[0] === "p").map(t => t[1])).toEqual([1,3,4,5,6,7,8,9,10,11].map(pubkey));
+  expect(e.content).toContain("200 points · 21 games · 20 wins");
   expect(e.content).toContain("2026-09-12 through 2026-10-02 (inclusive)");
   expect(e.content).toContain("Snapshot: 2026-10-02T12:00:00.000Z");
   expect(e.content).toContain("today’s puzzle is still in progress");
