@@ -28,7 +28,7 @@ class ChatReviewActivity:ComponentActivity() {
                 val members=if(selected==today)mapOf(owner to ChatMember("Alex (review)","","2"),other to ChatMember("Maya (review)","","X"))else mapOf(owner to ChatMember("Alex (review)","","5"),other to ChatMember("Maya (review)","","3"))
                 Column(Modifier.fillMaxSize().background(Background).safeDrawingPadding()) {
                     Copy("TWO-ROOM REVIEW FIXTURE · no network or signer",10,Orange,modifier=Modifier.fillMaxWidth().padding(8.dp))
-                    ChatDayNavigation(selected,today){selected=it}
+                    ChatToolbar(selected,today,if(yesterdayOnly&&selected==today)null else rooms.getValue(selected),false,System.currentTimeMillis(),{finish()},{selected=it},{})
                     if(yesterdayOnly&&selected==today)Column(Modifier.padding(20.dp)){Copy("Today is not completed",20,bold=true);Copy("Yesterday’s verified room remains available using the button above.",13,Muted,modifier=Modifier.padding(top=12.dp))}
                     else ChatConversation(rooms.getValue(selected),owner,rows.getValue(selected),members,drafts[selected].orEmpty(),"",false,System.currentTimeMillis(),{drafts=drafts+(selected to it)},{rows=rows+(selected to (rows.getValue(selected)+ChatMessage("fixture-$selected-${rows.getValue(selected).size+1}",owner,System.currentTimeMillis()/1000,drafts[selected].orEmpty())));drafts=drafts+(selected to "")},{},{finish()},scrolls.getOrPut(selected){ChatScrollMemory()})
                 }

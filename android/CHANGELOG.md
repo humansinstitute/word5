@@ -1,3 +1,8 @@
+# 1.0.8 (9)
+
+- Collapse chat navigation into one compact toolbar, leaving more room for messages with the keyboard open.
+- Keep day switching and refresh in the toolbar, room expiry behind the room title, and Play/Social in the menu.
+
 ## 1.0.7 (8)
 
 - Keep accepted lifetime bests separate from recovered game counts and current streaks.

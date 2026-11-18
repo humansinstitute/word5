@@ -1,5 +1,6 @@
 package ai.otherstuff.word5
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,13 +30,30 @@ import java.time.format.DateTimeFormatter
 class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     var count=0;var lastMessage:String?=null;var initialized=false
 }
-@Composable fun ChatDayNavigation(selected:Long,today:Long,onSelect:(Long)->Unit) {
-    Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal=12.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
-        Copy(if(selected==today)"Today’s chat" else "Yesterday’s chat",13,bold=true)
-        WebButton(if(selected==today)"See yesterday’s chat"else"See today’s chat",compact=true){onSelect(if(selected==today)today-1 else today)}
+/** One navigation row; room details stay available without occupying conversation space. */
+@Composable fun ChatToolbar(selected:Long,today:Long,room:ChatRoom?,busy:Boolean,now:Long,onMenu:()->Unit,onSelect:(Long)->Unit,onRefresh:()->Unit) {
+    var details by remember(selected){mutableStateOf(false)}
+    BackHandler(details){details=false}
+    val current=selected==today
+    Row(Modifier.fillMaxWidth().background(Panel).heightIn(min=56.dp).padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically) {
+        Box(Modifier.size(44.dp).semantics{contentDescription="Menu"}.clickable(onClick=onMenu),contentAlignment=Alignment.Center){Copy("☰",22)}
+        Column(Modifier.weight(1f).clickable{details=true}.padding(horizontal=4.dp,vertical=6.dp).semantics{contentDescription="Chat room details"}) {
+            Text((if(current)"Today"else"Yesterday")+" · "+(room?.word?:"Chat"),maxLines=1,overflow=TextOverflow.Ellipsis,color=Color.White,fontSize=15.sp,fontFamily=WebFont)
+            Copy(room?.date?:java.time.LocalDate.ofEpochDay(selected).toString(),10,Muted)
+        }
+        Box(Modifier.heightIn(min=44.dp).semantics{contentDescription=if(current)"See yesterday’s chat"else"See today’s chat"}.clickable{onSelect(if(current)today-1 else today)}.padding(horizontal=8.dp),contentAlignment=Alignment.Center){Copy(if(current)"Yesterday"else"Today",12,Color(0xFFD8B4FE),true)}
+        Box(Modifier.size(44.dp).semantics{contentDescription=if(busy)"Cancel chat action"else"Refresh messages"}.clickable(onClick=onRefresh),contentAlignment=Alignment.Center){Copy(if(busy)"×"else"↻",25)}
+    }
+    RuleLine()
+    if(details)WebModal({details=false}) {
+        Copy("${if(current)"Today’s"else"Yesterday’s"} chat",20,bold=true)
+        Copy(room?.let{"${it.date} · ${it.word}"}?:java.time.LocalDate.ofEpochDay(selected).toString(),16,modifier=Modifier.padding(top=12.dp))
+        Copy("Finishers only · spoilers welcome",13,Muted,modifier=Modifier.padding(top=8.dp))
+        room?.let { val seconds=maxOf(0,(it.expiresAt-now)/1000);Copy("Closes in ${seconds/3600}h ${seconds%3600/60}m",13,Muted,modifier=Modifier.padding(top=12.dp)) }
+        WebButton("Close",Modifier.fillMaxWidth().padding(top=16.dp)){details=false}
     }
 }
-@Composable fun ChatScreen(m:GameModel,back:()->Unit) {
+@Composable fun ChatScreen(m:GameModel,onMenu:()->Unit,back:()->Unit) {
     var confirm by remember(m.owner,m.selectedChatPeriod){mutableStateOf(false)}
     var now by remember{mutableLongStateOf(System.currentTimeMillis())}
     val scrolls=remember(m.owner){mutableMapOf<Long,ChatScrollMemory>()}
@@ -47,7 +65,7 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     scrolls.keys.removeAll{it !in (today-1)..today}
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            ChatDayNavigation(m.selectedChatPeriod,today){confirm=false;m.selectChatDay(it)}
+            ChatToolbar(m.selectedChatPeriod,today,m.chatRoom,m.chatBusy,now,onMenu,{confirm=false;m.selectChatDay(it)},{if(m.chatBusy)m.cancelChat()else m.refreshChat()})
             Box(Modifier.weight(1f)) {
                 val room=m.chatRoom
                 if(room!=null)ChatConversation(room,m.owner,m.chatMessages,m.chatMembers,m.chatDraft,m.chatStatus,m.chatBusy,now,m::editChat,m::sendChat,{if(m.chatBusy)m.cancelChat()else m.refreshChat()},back,scrolls.getOrPut(room.period){ChatScrollMemory()})
@@ -92,12 +110,6 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
         memory.count=messages.size;memory.lastMessage=last;memory.initialized=true
     }
     Column(Modifier.fillMaxSize().imePadding()) {
-        Column(Modifier.fillMaxWidth().background(Panel).padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Column(Modifier.weight(1f)){Copy("${room.date} · ${room.word}",19,bold=true);Copy(if(room.period==Rules.period(now))"Today’s finishers · spoilers welcome"else"Yesterday’s finishers · spoilers welcome",12,Muted,modifier=Modifier.padding(top=4.dp))};WebButton("Back",compact=true,onClick=onBack)}
-            val seconds=maxOf(0,(room.expiresAt-now)/1000)
-            Row(Modifier.fillMaxWidth().padding(top=14.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){WebButton(if(busy)"Cancel" else "Refresh",compact=true,onClick=onRefresh);Copy("Closes in ${seconds/3600}h ${seconds%3600/60}m",11,Muted)}
-        }
-        RuleLine()
         if(messages.isEmpty())Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp),contentAlignment=Alignment.Center){Column(horizontalAlignment=Alignment.CenterHorizontally){Copy("You made it. Let’s talk.",18,bold=true);Copy("How did you find today’s word? Be the first to start the conversation.",13,Muted,modifier=Modifier.padding(top=12.dp))}}
         else LazyColumn(Modifier.weight(1f).fillMaxWidth(),state=list,contentPadding=PaddingValues(12.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             items(messages,key={it.id}){message->ChatMessageRow(message,members[message.pubkey],message.pubkey==owner)}
@@ -111,7 +123,7 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
                 }
                 Box(Modifier.height(42.dp).width(58.dp).background(if(!busy&&draft.isNotBlank())Purple else Border,RoundedCornerShape(10.dp)).clickable(enabled=!busy&&draft.isNotBlank(),onClick=onSend),contentAlignment=Alignment.Center){Copy("Send",13,bold=true)}
             }
-            Copy("Encrypted group · room expiry shown above",10,Muted,modifier=Modifier.padding(top=8.dp))
+            Copy("Encrypted group · tap room title for details",10,Muted,modifier=Modifier.padding(top=8.dp))
         }
     }
 }

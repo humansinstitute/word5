@@ -52,6 +52,8 @@ See [the native action inventory](web-parity.md) for the intentional Amber/priva
 
 ## Native daily group chat
 
+Chat uses one compact toolbar with the account/navigation menu, room name and date, day switch, and Refresh (Cancel while busy). Tap the room title for expiry and room details. Play and Social remain in the menu; Android Back returns to Play. This keeps the conversation and composer visible when the keyboard opens.
+
 Open **Discuss today’s game** from the result or **Daily chat** from the menu. **See yesterday’s chat** and **See today’s chat** move between exactly two daily views. Each date-and-word room requires its own verified completion. Yesterday can be visited before finishing today; finishing today never unlocks yesterday. Yesterday’s chat is available if its result was already verified by Word5. An older private or restored result cannot submit missing historical guesses through this feature.
 
 Signed room checks never submit guesses. A completed private game can unlock today only after the separate **Validate result and unlock chat** disclosure and confirmation: Word5 receives the original ordered guesses to validate that specific date’s result and record its score. No public Nostr post is created. Automatic encrypted backup never performs this validation. A midnight or account change during approval requires a fresh confirmation; a newer game cannot replace the confirmed one.

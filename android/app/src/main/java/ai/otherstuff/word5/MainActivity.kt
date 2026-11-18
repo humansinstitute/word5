@@ -131,6 +131,7 @@ class MainActivity: ComponentActivity() {
             val keyHeight = (maxWidth * .10f).coerceIn(48.dp, 58.dp)
             val keyGap = (maxWidth * .01f).coerceIn(4.dp, 6.dp)
             Column(Modifier.width(width).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                if(page!="Chat") {
                 Row(Modifier.fillMaxWidth().height(if(mobile)62.dp else 63.dp).padding(horizontal = if(mobile)8.dp else 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Box(Modifier.size(36.dp).background(Panel,RoundedCornerShape(8.dp)).border(1.dp,Border,RoundedCornerShape(8.dp)).semantics{contentDescription="Menu"}.clickable { menu = !menu }, contentAlignment = Alignment.Center) { Canvas(Modifier.size(12.dp,10.dp)) { for(y in listOf(1f,5f,9f))drawLine(Color.White,androidx.compose.ui.geometry.Offset(0f,y.dp.toPx()),androidx.compose.ui.geometry.Offset(size.width,y.dp.toPx()),strokeWidth=1.2.dp.toPx()) } }
                     Row(verticalAlignment = Alignment.CenterVertically) { Text("WORD5",fontSize = if(mobile)20.sp else 32.sp,fontWeight = FontWeight.Bold,letterSpacing = if(mobile).8.sp else 3.2.sp); if(game.hard) Copy("*",10,Orange,true,Modifier.padding(start=8.dp)) }
@@ -143,6 +144,7 @@ class MainActivity: ComponentActivity() {
                     }
                 }
                 RuleLine()
+                }
                 if(page=="Play") {
                     Column(Modifier.weight(1f).padding(top=8.dp).verticalScroll(rememberScrollState()),horizontalAlignment=Alignment.CenterHorizontally) {
                         Column(Modifier.padding(10.dp), verticalArrangement=Arrangement.spacedBy(5.dp)) {
@@ -174,11 +176,15 @@ class MainActivity: ComponentActivity() {
                             }
                         }
                     }
-                } else if(page=="Chat") ChatScreen(m) { page="Play" } else SocialScreen(m, { modal=it }, share)
+                } else if(page=="Chat") ChatScreen(m,{menu=!menu}) { page="Play" } else SocialScreen(m, { modal=it }, share)
             }
             if(menu) {
                 Box(Modifier.fillMaxSize().clickable { menu=false })
                 Column(Modifier.align(Alignment.TopStart).padding(start=(maxWidth-width)/2+8.dp,top=57.dp).width(240.dp).heightIn(max=maxHeight-65.dp).background(Panel,RoundedCornerShape(8.dp)).border(1.dp,Border,RoundedCornerShape(8.dp)).verticalScroll(rememberScrollState()).padding(13.dp)) {
+                    if(page=="Chat") {
+                        WebButton("Play",Modifier.fillMaxWidth().padding(bottom=6.dp)){menu=false;page="Play"}
+                        WebButton("Social",Modifier.fillMaxWidth().padding(bottom=6.dp)){menu=false;page="Social"}
+                    }
                     ToggleRow("Hard Mode",if(game.guesses.isEmpty()) "Must use revealed hints" else "Only at puzzle start",m.state.hard,game.guesses.isEmpty() && !m.completed()) { m.toggleHard() }
                     ToggleRow("Encrypted Sync",if(m.publicBusy) "Amber action · tap to cancel" else if(m.owner.isEmpty()) if(m.message.contains("failed")) "Amber unavailable · tap to retry" else "Sign in for automatic backup" else if(!m.syncEnabled) "Paused · tap to resume" else if(m.syncing) "Syncing… · tap to cancel" else if(m.message.startsWith("Encrypted backup")) "Up to date · tap to sync" else "Backup pending · tap to retry",m.owner.isNotEmpty() && m.syncEnabled,m.owner.isNotEmpty() && !m.publicBusy, { if(m.publicBusy || m.syncing)m.cancel() else if(m.owner.isEmpty())m.login() else m.sync(true) }) { m.toggleSync() }
                     Copy(if(m.owner.isEmpty()) "Session: offline player" else "Amber: ${m.owner.take(8)}…${m.owner.takeLast(4)}",12,modifier=Modifier.padding(bottom=10.dp).height(14.dp))
