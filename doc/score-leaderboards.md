@@ -29,7 +29,7 @@ Startup migration adds `verified_completion`, `published_at`, and `public_event_
 
 ## Activation notes
 
-The registered developer Word5 app serves this checkout at port 41005 and owns its local SQLite database. Both `https://word5test.runwingman.com` and `https://late-bee-mill.rick.runwingman.com` resolve to that app. The separate registered Word5 Server app serves `/Users/mini/code/games/word5-server` at port 41048 and has a different SQLite database; its developer URL is `https://wise-zap-swan.rick.runwingman.com`. These apps are not interchangeable. A managed restart of the Word5 app is required before its running Bun server exposes the new routes, although static HTML and JS already read from the source directory. Rick owns activation and review. The production `/word5` route is separate and must not be deployed until Pete confirms the developer app.
+Each instance owns its own SQLite database. Keep private instance addresses, ports and local filesystem paths in private operational configuration. Server route changes require managed activation and health verification. Production deployments follow the repository deployment process and the current owner authorization.
 
 Client API requests use relative `api/...` URLs. This resolves to `/api/...` on a developer app domain and `/word5/api/...` on the production subpath. The older root-relative `/api/submit` URL does not resolve on the production host.
 

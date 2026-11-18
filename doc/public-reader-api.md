@@ -13,9 +13,8 @@ The server reconstructs the external URL from a trusted configuration, never fro
 | Instance | `WORD5_READER_PUBLIC_BASE` |
 | --- | --- |
 | Production | `https://otherstuff.ai/word5/` (default) |
-| Development WApp | `https://late-bee-mill.rick.runwingman.com/` |
 
-If unset, the reader uses `WORD5_PUBLIC_BASE`, then the production default. An invalid base fails startup. Configuration changes require the normal authorized activation of the server. The production reverse proxy must strip `/word5` before forwarding to Bun; Bun receives `/api/public-reader/v1/...`. The development WApp forwards that path directly. Preserve the complete original query and Authorization header. Do not permit caches to store authenticated responses. A development token is not valid on production, or vice versa.
+If unset, the reader uses `WORD5_PUBLIC_BASE`, then the production default. An invalid base fails startup. Configuration changes require the normal authorized activation of the server. The production reverse proxy must strip `/word5` before forwarding to Bun; Bun receives `/api/public-reader/v1/...`. Preserve the complete original query and Authorization header. Do not permit caches to store authenticated responses. Tokens are bound to the configured instance URL. Keep private instance addresses in private operational configuration.
 
 `GET /api/health` exposes `publicReader.build` (`20261118-1`) and `publicReader.path` to identify the activated implementation. This marker is source evidence until the intended runtime has been activated and checked.
 

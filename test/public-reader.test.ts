@@ -43,7 +43,7 @@ describe('reader NIP-98 boundary', () => {
     expect(defaultReader.handle(new Request('http://local'+READER_PATH,{headers:{authorization:'Nostr '+Buffer.from(JSON.stringify(event)).toString('base64')}}),f.now).status).toBe(401);
   });
   test('valid production prefix and dev root; internal, wrong prefix/origin/query/order and proxy tricks fail', () => {
-    for (const base of ['https://otherstuff.ai/word5/', 'https://late-bee-mill.rick.runwingman.com/']) {
+    for (const base of ['https://otherstuff.ai/word5/', 'https://reader.example.test/']) {
       const f = fixture(base), suffix = '/results?limit=1&periodId=20770';
       expect(f.request(suffix).status).toBe(200);
       for (const url of ['http://127.0.0.1:41005'+READER_PATH+suffix, 'https://evil.test/'+READER_PATH.slice(1)+suffix,
@@ -186,7 +186,7 @@ test('isolated real server routes reader before side effects and preserves exist
   // Explicit environment and --no-env-file prevent loading repository signing secrets.
   const child = Bun.spawn([process.execPath,'--no-env-file','run','src/server.ts'],{
     cwd:join(import.meta.dir,'..'), env:{PATH:process.env.PATH!,HOME:root,PORT:String(port),WORD5_DB_PATH:join(root,'test.sqlite'),
-      WORD5_RELAYS:'',GAMESTR_RELAYS:'',WORD5_READER_PUBLIC_BASE:'https://late-bee-mill.rick.runwingman.com/'},stdout:'ignore',stderr:'pipe',
+      WORD5_RELAYS:'',GAMESTR_RELAYS:'',WORD5_READER_PUBLIC_BASE:'https://reader.example.test/'},stdout:'ignore',stderr:'pipe',
   });
   const base='http://127.0.0.1:'+port;
   try {
@@ -207,7 +207,7 @@ test('isolated real server routes reader before side effects and preserves exist
     expect((await fetch(base+'/api/leaderboard?limit=1')).status).toBe(200);
     expect((await fetch(base+'/api/native-backup/read',{method:'POST'})).status).toBe(503);
     const key=generateSecretKey();
-    const event=finalizeEvent({kind:27235,created_at:Math.floor(Date.now()/1000),tags:[['u','https://late-bee-mill.rick.runwingman.com'+READER_PATH+'/results'],['method','GET']],content:''},key);
+    const event=finalizeEvent({kind:27235,created_at:Math.floor(Date.now()/1000),tags:[['u','https://reader.example.test'+READER_PATH+'/results'],['method','GET']],content:''},key);
     expect((await fetch(base+READER_PATH+'/results',{headers:{authorization:'Nostr '+Buffer.from(JSON.stringify(event)).toString('base64')}})).status).toBe(401);
   } finally { child.kill(); await child.exited; }
 },10000);
