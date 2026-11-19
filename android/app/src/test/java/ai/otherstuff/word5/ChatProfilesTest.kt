@@ -32,8 +32,8 @@ class ChatProfilesTest {
         assertEquals("missing",c.value("a").state);assertEquals(60000,c.value("a").due)
         now=59999;assertTrue(c.begin(listOf("a"),true).isEmpty())
         now=60000;c.finish(c.begin(listOf("a"),true).single(),JSONObject().put("name","Maya"),false)
-        now+=600000;c.finish(c.begin(listOf("a"),true).single(),null,true)
-        assertEquals("Maya",c.value("a").profile!!.getString("name"));assertEquals("retry",c.value("a").state)
+        now+=PROFILE_TTL_MS;c.finish(c.begin(listOf("a"),true).single(),null,true)
+        assertEquals("Maya",c.value("a").profile!!.getString("name"));assertEquals("ready",c.value("a").state)
         now=c.value("a").due;c.finish(c.begin(listOf("a"),true).single(),null,false)
         assertEquals("Maya",c.value("a").profile!!.getString("name"))
     }
@@ -61,4 +61,17 @@ class ChatProfilesTest {
         assertEquals("<script>evil</script>",m.name);assertEquals(2000,m.bio.length);assertEquals("",m.picture)
         val npub=encodeNpub("b".repeat(64));assertEquals("b".repeat(64),amberPublicKey(npub))
     }
+    @Test fun ownPrefsDisplayDoesNotForgeOrEraseAndEstablishedStatesRemainQuiet(){
+        val cached=ownDisplaySnapshot(null,"Own name","https://example.com/own.png")
+        assertEquals("Own name",cached.getString("name"));assertFalse(cached.has("sig"));assertFalse(cached.has("pubkey"))
+        val empty=ownDisplaySnapshot(JSONObject(),"Own name","https://example.com/own.png")
+        assertEquals(cached.toString(),empty.toString())
+        val published=JSONObject().put("name","Edited").put("about","New bio").put("custom",42)
+        assertEquals(42,ownDisplaySnapshot(published,"Old","").getInt("custom"));assertEquals("Edited",ownDisplaySnapshot(published,"Old","").getString("name"))
+        var now=1L;val c=ChatProfiles({now},{0.5});c.put("own",cached);now+=PROFILE_TTL_MS
+        val read=c.begin(listOf("own"),true).single();assertEquals("ready",c.value("own").state)
+        c.finish(read,null,true);assertEquals("ready",c.value("own").state);assertEquals("Own name",c.value("own").profile!!.getString("name"))
+        now=c.value("own").due;c.begin(listOf("own"),false);assertEquals("ready",c.value("own").state)
+    }
+
 }

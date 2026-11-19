@@ -23,12 +23,51 @@ An empty result with any failed/timed-out endpoint stays retryable. Even a compl
 empty lookup is worded as absence on the checked relays, with a short retry TTL.
 
 `ProfileEventCache` stores only verified public kind-0 events in app-private
-`public-profiles-v1.json`: at most 256 events, at most 12 KB per serialized event.
+`public-profiles-v1.json`: at most 512 events, at most 12 KB per serialized event.
 Cold loading revalidates signatures, event kinds, timestamps and metadata; corrupt
 entries are ignored separately. Replacement and size limits apply before atomic
 file replacement. Account changes clear presentation state while this public-only
 cache remains reusable. Stale profiles display during network refresh/failure.
 The cache is an optimization; it does not establish global freshness or absence.
+
+## Local-first freshness and avatar storage
+
+The same cache filename now contains a version-2 envelope with the complete signed
+`event` and a separate `checkedAt` timestamp for each public key. Legacy arrays are
+reverified and retained with unknown freshness, prompting one conservative refresh.
+A verified identical event renews `checkedAt`; its old `created_at` is not an expiry.
+Only accepted usable signed events advance freshness. Empty/failed reads never do.
+For 48 hours, observation returns saved data without a profile request. Afterwards
+it emits saved data first and refreshes quietly. TTL does not delete data. Chat
+retains ready presentation for established profiles throughout refresh/failure.
+
+`PublicAvatars` shares `AvatarStore`/`AvatarLoader` across chat rows/dialogs, own
+profile editing, community/league avatars and duel rendering. Exact public keys
+select the last successful image; requested URLs never become filenames. Public
+avatar bytes live in app-private `filesDir/public-avatars-v1`, separate from
+OS-evictable cache storage. Each atomic, checksummed envelope contains key, source
+URL, successful check time and original bytes. Before replacement, bytes must fit
+3 MB and decode as a valid bounded image. Decode happens off the UI thread at a
+sampled size; an 8 MiB bitmap LRU avoids duplicate decoded images in repeated rows.
+Three concurrent downloads, per-key joining and a one-minute failed-read backoff
+bound work. HTTPS and safe redirects are required; downgrades are rejected and
+coroutine cancellation cancels the active OkHttp call, including body reads.
+
+Warm images perform no HTTP request for 48 hours. Stale images display before HTTP
+work, and a changed URL retains the previous image until a valid replacement is
+saved. Invalid/empty/404/offline responses never overwrite good bytes. The store
+uses a 64 MiB/512-image least-recent-use bound and protects the active owner. Only
+profile avatars use this durable store; feed/post media retain their transient path.
+
+Own preferences seed display only and stay associated with their exact public key;
+they never create signed events or authorize editing an unknown original profile.
+The editor starts from complete verified metadata, preserving unrelated fields.
+An Amber-signed edit is accepted into the durable cache and UI before relay
+publication, with avatar prefetch. Publication failure still reports a failure; it
+does not erase the locally signed edit. An intentional signed local clear removes
+the avatar and invalidates older in-flight writes. Remote failure/empty lookup
+cannot clear known name/picture preferences. No chat messages, room keys, private
+events, signer credentials or Amber secrets enter either public cache.
 
 The design borrows these focused principles from the primary Applesauce sources:
 
@@ -70,3 +109,13 @@ Android and the JVM test org.json library have different escaping behavior. Both
 captured real events and independent Unicode edge events must be checked on Android;
 a JVM-only hash mismatch is not evidence of a native ingestion failure. This release
 keeps the existing Android event serialization/signing contract unchanged.
+
+For local-first Android checks, `ProfileProbeActivity` accepts `localFirst:true`
+and optional `clockOffsetMs` to exercise production caches with a debug clock. Its
+report includes profile subscription and actual image HTTP counters. Optional
+`acceptOwn:true` loads a supplied disposable signed event from
+`files/profile-own-event.json` through production local acceptance, without
+publication. Mode 6 of `ChatReviewActivity` also accepts `ownerPublicKey` to test
+both sides of simulated chat with exact public-key associations. Use only a
+separate debug package/emulator; force-stop between cache/offline checks, restore
+network settings, and keep real public-person data/screenshots in ignored handoffs.

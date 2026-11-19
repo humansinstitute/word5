@@ -17,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.lastOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -51,7 +52,7 @@ fun postMedia(e:Event):List<String> {
 
 /** Native equivalent of the web's 1200×675 canvas, uploaded only after the Share tap. */
 suspend fun renderDuelCard(left:SocialIdentity,right:SocialIdentity,leftScore:Int,rightScore:Int):ByteArray = withContext(Dispatchers.Default) {
-    val avatars=listOf(socialBitmap(left.avatar),socialBitmap(right.avatar))
+    val avatars=listOf(chatProfileBitmap(left.avatar,left.pubkey),chatProfileBitmap(right.avatar,right.pubkey))
     val bitmap=Bitmap.createBitmap(1200,675,Bitmap.Config.ARGB_8888);val c=Canvas(bitmap)
     val p=Paint(Paint.ANTI_ALIAS_FLAG);val white=android.graphics.Color.WHITE
     p.shader=android.graphics.LinearGradient(0f,0f,1200f,675f,android.graphics.Color.rgb(15,16,18),android.graphics.Color.rgb(27,27,31),android.graphics.Shader.TileMode.CLAMP)
@@ -87,21 +88,5 @@ suspend fun renderDuelCard(left:SocialIdentity,right:SocialIdentity,leftScore:In
     ByteArrayOutputStream().use{out->bitmap.compress(Bitmap.CompressFormat.PNG,100,out);bitmap.recycle();out.toByteArray()}
 }
 
-private data class ChatImage(val bitmap:Bitmap?,val time:Long)
-private val chatImageCache=android.util.LruCache<String,ChatImage>(32)
-private class ChatImageLock(val mutex:kotlinx.coroutines.sync.Mutex=kotlinx.coroutines.sync.Mutex(),var users:Int=0)
-private val chatImageLocks=mutableMapOf<String,ChatImageLock>()
-private val chatImagePermits=kotlinx.coroutines.sync.Semaphore(3)
-/** Separate bounded, deduplicated public-profile image reads; a broken picture retains initials. */
-suspend fun chatProfileBitmap(url:String):Bitmap? {
-    if(safeProfilePicture(url).isEmpty())return null
-    val lock=synchronized(chatImageLocks){chatImageLocks.getOrPut(url){ChatImageLock()}.also{it.users++}}
-    try {
-        lock.mutex.lock()
-        try {
-            chatImageCache.get(url)?.takeIf{it.bitmap!=null||System.currentTimeMillis()-it.time<60000}?.let{return it.bitmap}
-            chatImagePermits.acquire()
-            try {return socialBitmap(url,256).also{chatImageCache.put(url,ChatImage(it,System.currentTimeMillis()))}}finally{chatImagePermits.release()}
-        }finally{lock.mutex.unlock()}
-    }finally{synchronized(chatImageLocks){lock.users--;if(lock.users==0)chatImageLocks.remove(url)}}
-}
+/** Profile-only image reuse for non-Compose consumers. */
+suspend fun chatProfileBitmap(url:String,owner:String=""):Bitmap?=PublicAvatars.observe(owner,url).lastOrNull()

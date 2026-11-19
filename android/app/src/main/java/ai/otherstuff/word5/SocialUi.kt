@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.time.LocalDate
@@ -40,10 +41,19 @@ private fun nowSeconds()=System.currentTimeMillis()/1000
 private fun openSocialLink(context:Context,url:String) { if(url.startsWith("https://")||url.startsWith("http://"))runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))} }
 private fun contactsOf(e:Event?)=e?.tags.orEmpty().filter{it.size>1&&it[0]=="p"&&it[1].matches(Regex("[0-9a-f]{64}"))}.map{it[1]}.distinct()
 private suspend fun socialProfiles(authors:List<String>):Map<String,JSONObject> {
-    val events=authors.filter{it.matches(Regex("[0-9a-f]{64}"))}.distinct().chunked(40).flatMap {
-        PublicNostr.query(JSONObject().put("kinds",array(listOf(0))).put("authors",array(it)).put("limit",it.size*3))
+    return kotlinx.coroutines.coroutineScope {
+        authors.filter{it.matches(Regex("[0-9a-f]{64}"))}.distinct().map { key->
+            async { key to (PublicProfiles.snapshot(key,refresh=true) ?: PublicNostr.chatProfile(key)) }
+        }.map{it.await()}.mapNotNull{(k,p)->p?.let{k to it}}.toMap()
     }
-    return events.groupBy{it.pubkey}.mapValues{(_,es)->runCatching{JSONObject(es.maxBy{it.created}.content)}.getOrDefault(JSONObject())}
+}
+/** Apply local signed edits/quiet refreshes to visible social identities without relay reads. */
+@Composable private fun WatchPublicProfiles(keys:Set<String>,apply:(Map<String,JSONObject>)->Unit) {
+    val version by PublicProfiles.changes.collectAsState()
+    LaunchedEffect(version,keys){
+        val snapshots=keys.filter{it.matches(Regex("[0-9a-f]{64}"))}.mapNotNull{key->PublicProfiles.snapshot(key)?.let{key to it}}.toMap()
+        if(snapshots.isNotEmpty())apply(snapshots)
+    }
 }
 private suspend fun loadSocialLeagues(owner:String):List<Event> {
     val base=JSONObject().put("kinds",array(listOf(30078))).put("#t",array(listOf("word5league"))).put("limit",500)
@@ -70,6 +80,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
     var revision by remember{mutableIntStateOf(0)};var following by remember{mutableStateOf(false)}
     var status by remember{mutableStateOf("Loading…")};var events by remember{mutableStateOf(emptyList<Event>())}
     var rows by remember{mutableStateOf(emptyList<JSONObject>())};var profiles by remember(m.owner){mutableStateOf(emptyMap<String,JSONObject>())}
+    WatchPublicProfiles(profiles.keys+m.owner){profiles=profiles+it}
     var selected by remember(m.owner){mutableStateOf("")};var visits by remember{mutableStateOf<JSONObject?>(null)}
     var opponent by remember(m.owner){mutableStateOf("")};var league by remember(m.owner){mutableStateOf<Event?>(null)};var createLeague by remember(m.owner){mutableStateOf(false)}
     var headline by remember{mutableStateOf("Loading current game players…")}
@@ -155,7 +166,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
 }
 @Composable fun SocialFeedCard(e:Event,identity:SocialIdentity,onPlayer:()->Unit,onLink:(String)->Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick=onPlayer).padding(16.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        Avatar(identity.avatar,identity.name,Modifier.size(48.dp))
+        Avatar(identity.avatar,identity.name,Modifier.size(48.dp),owner=identity.pubkey)
         Column(Modifier.weight(1f)) {
             FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {Copy(identity.name,15,bold=true);Copy(identity.handle,13,Muted);Copy("· ${relativeTime(e.created)}",13,Muted)}
             val content=remember(e.content){buildAnnotatedString {
@@ -173,7 +184,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
 @Composable fun SocialRankingRow(tab:String,rank:Int,row:JSONObject,identity:SocialIdentity,onClick:()->Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick=onClick).padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
         Copy(if(tab=="Top Streaks"&&rank<=3)listOf("🥇","🥈","🥉")[rank-1] else "#$rank",16,Muted,true,Modifier.width(36.dp),TextAlign.Center)
-        Avatar(identity.avatar,identity.name,Modifier.size(40.dp))
+        Avatar(identity.avatar,identity.name,Modifier.size(40.dp),owner=identity.pubkey)
         Column(Modifier.weight(1f)) {
             Text(identity.name,color=Color.White,fontSize=15.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis,fontFamily=WebFont)
             val detail=when(tab){"Duels"->"${row.optInt("points")} pts in 21d · ${row.optInt("games")} recent games";"Top Streaks"->"Lifetime best · ${row.optString("source")}";else->"${row.optInt("games")} games · ${row.optInt("wins")} wins · ${row.optInt("publishedGames")} posted"}
@@ -187,7 +198,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
     var contact by remember(m.owner,pk){mutableStateOf<Event?>(null)};var loaded by remember(m.owner,pk){mutableStateOf(false)};var status by remember{mutableStateOf("Loading follows…")}
     LaunchedEffect(m.owner,pk){if(m.owner.isNotEmpty())try{contact=PublicNostr.contacts(m.owner);loaded=true;status=if(pk==m.owner)"This is you!" else if(pk in contactsOf(contact))"You already follow this person." else "This will update your follows to ${contactsOf(contact).size+1} people."}catch(e:CancellationException){throw e}catch(e:Exception){status="Could not load follows: ${e.message}"}else status="Sign in with Amber to follow people."}
     WebModal(close) {
-        ModalHeading(identity.name,close);Avatar(identity.avatar,identity.name,Modifier.align(Alignment.CenterHorizontally).size(72.dp));Copy(identity.handle,12,Muted,modifier=Modifier.padding(vertical=10.dp));Copy(profile?.optString("about").orEmpty(),13,Muted);Copy(status,13,Muted,modifier=Modifier.padding(vertical=12.dp))
+        ModalHeading(identity.name,close);Avatar(identity.avatar,identity.name,Modifier.align(Alignment.CenterHorizontally).size(72.dp),owner=identity.pubkey);Copy(identity.handle,12,Muted,modifier=Modifier.padding(vertical=10.dp));Copy(profile?.optString("about").orEmpty(),13,Muted);Copy(status,13,Muted,modifier=Modifier.padding(vertical=12.dp))
         if(loaded&&pk!=m.owner&&pk !in contactsOf(contact))WebButton("Follow",Modifier.fillMaxWidth(),primary=true){m.publicAction{owner->check(owner!=pk);val fresh=PublicNostr.contacts(owner);check(pk !in contactsOf(fresh)){"Already following"};val tags=fresh?.tags.orEmpty();check(tags.size<5000);PublicNostr.publish(m.amber.sign(Event(owner,nowSeconds(),3,tags+listOf(listOf("p",pk)),fresh?.content.orEmpty())));close();"Following ${identity.name}"}}
         if(m.owner.isEmpty())WebButton("Login with Amber",Modifier.fillMaxWidth()){close();m.login()}
         if(m.owner.isNotEmpty()&&pk!=m.owner)WebButton("Compare scores",Modifier.fillMaxWidth().padding(top=8.dp),onClick=compare)
@@ -229,7 +240,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
     }
 }
 @Composable private fun ComparePanel(identity:SocialIdentity,score:Int,winner:Boolean,modifier:Modifier) {
-    Column(modifier.background(Panel,RoundedCornerShape(14.dp)).border(1.dp,SocialDivider,RoundedCornerShape(14.dp)).padding(horizontal=14.dp,vertical=16.dp),horizontalAlignment=Alignment.CenterHorizontally){Avatar(identity.avatar,identity.name,Modifier.size(72.dp));Copy(identity.name+if(winner)" 🏆" else "",16,bold=true,modifier=Modifier.padding(top=if(winner)16.dp else 10.dp));Copy(identity.handle,12,Muted,modifier=Modifier.padding(top=4.dp));Copy(score.toString(),40,Purple,true,Modifier.padding(top=14.dp))}
+    Column(modifier.background(Panel,RoundedCornerShape(14.dp)).border(1.dp,SocialDivider,RoundedCornerShape(14.dp)).padding(horizontal=14.dp,vertical=16.dp),horizontalAlignment=Alignment.CenterHorizontally){Avatar(identity.avatar,identity.name,Modifier.size(72.dp),owner=identity.pubkey);Copy(identity.name+if(winner)" 🏆" else "",16,bold=true,modifier=Modifier.padding(top=if(winner)16.dp else 10.dp));Copy(identity.handle,12,Muted,modifier=Modifier.padding(top=4.dp));Copy(score.toString(),40,Purple,true,Modifier.padding(top=14.dp))}
 }
 @Composable private fun CompareCell(row:JSONObject?,modifier:Modifier){Column(modifier){Copy(row?.let{"${it.optString("result")}/6"}?:"Missed",14,if(row==null)Muted else Color.White,true);Copy("${row?.optInt("points")?:0} pts",12,Orange,modifier=Modifier.padding(top=4.dp))}}
 
@@ -245,6 +256,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
     val today=LocalDate.now(ZoneOffset.UTC);val thisMonday=today.minusDays((today.dayOfWeek.value-1).toLong()).toEpochDay()
     var day by remember{mutableIntStateOf(today.dayOfWeek.value-1)};var member by remember{mutableStateOf("")};var edit by remember{mutableStateOf(false)};var confirmLeave by remember{mutableStateOf(false)}
     var rows by remember{mutableStateOf(emptyList<JSONObject>())};var profiles by remember{mutableStateOf(emptyMap<String,JSONObject>())};var requests by remember{mutableStateOf(emptyList<Event>())};var status by remember{mutableStateOf("Loading…")};var retry by remember{mutableIntStateOf(0)}
+    WatchPublicProfiles(profiles.keys+m.owner){profiles=profiles+it}
     val members=leagueMembers(event);val monday=thisMonday+weekOffset*7
     LaunchedEffect(event.id,monday,retry){status="Loading…";try{rows=PublicNostr.history(members,monday*86400,(monday+7)*86400-1);profiles=socialProfiles(members);status="";if(event.pubkey==m.owner)requests=PublicNostr.query(JSONObject().put("kinds",array(listOf(30078))).put("#t",array(listOf("word5league-leave","word5league-rejoin"))).put("#p",array(listOf(m.owner))).put("limit",500))}catch(e:CancellationException){throw e}catch(e:Exception){status="League unavailable: ${e.message}"}}
     val pending=pendingLeagueLeaves(event,requests)
@@ -289,8 +301,8 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
             Column(Modifier.clickable{selectDay(i)}.padding(2.dp),horizontalAlignment=Alignment.CenterHorizontally) {
                 Box(Modifier.border(2.dp,if(daily&&day==i)Orange else Color.Transparent,RoundedCornerShape(50)).padding(3.dp).size(36.dp).background(if(winners.isEmpty())SocialDivider else Color.Transparent,RoundedCornerShape(50)),contentAlignment=Alignment.Center) {
                     if(winners.isEmpty())Copy("—",11,Muted)
-                    else if(winners.size==1){val identity=socialIdentity(winners[0],profiles);Avatar(identity.avatar,identity.name,Modifier.size(36.dp))}
-                    else {val a=socialIdentity(winners[0],profiles);val b=socialIdentity(winners[1],profiles);Avatar(b.avatar,b.name,Modifier.align(Alignment.BottomEnd).size(24.dp));Avatar(a.avatar,a.name,Modifier.align(Alignment.TopStart).size(24.dp))}
+                    else if(winners.size==1){val identity=socialIdentity(winners[0],profiles);Avatar(identity.avatar,identity.name,Modifier.size(36.dp),owner=identity.pubkey)}
+                    else {val a=socialIdentity(winners[0],profiles);val b=socialIdentity(winners[1],profiles);Avatar(b.avatar,b.name,Modifier.align(Alignment.BottomEnd).size(24.dp),owner=b.pubkey);Avatar(a.avatar,a.name,Modifier.align(Alignment.TopStart).size(24.dp),owner=a.pubkey)}
                 };Copy(listOf("M","T","W","T","F","S","S")[i],10,if(today)Orange else Muted,true,Modifier.padding(top=4.dp))
             }
         }};SocialRule()
@@ -298,7 +310,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
         board.forEachIndexed{i,r->val pk=r.getString("pubkey");val identity=socialIdentity(pk,profiles);val entry=scoreHistory(rows).firstOrNull{it.optString("pubkey")==pk&&historyPeriod(it)==monday+day}
             Row(Modifier.fillMaxWidth().clickable{selectMember(pk)}.padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                 if(!daily)Copy("#${i+1}",16,Muted,true,Modifier.width(36.dp),TextAlign.Center)
-                Avatar(identity.avatar,identity.name,Modifier.size(if(daily)36.dp else 40.dp).then(if(daily&&pk in leagueDayWinners(rows,members,monday+day))Modifier.border(2.dp,Orange,RoundedCornerShape(50)) else Modifier))
+                Avatar(identity.avatar,identity.name,Modifier.size(if(daily)36.dp else 40.dp).then(if(daily&&pk in leagueDayWinners(rows,members,monday+day))Modifier.border(2.dp,Orange,RoundedCornerShape(50)) else Modifier),owner=identity.pubkey)
                 Column(Modifier.weight(1f)){Copy(identity.name,if(daily)14 else 15,bold=true);if(!daily)Copy("${r.optInt("games")} games played",12,Muted)}
                 if(daily)Copy(entry?.let{"${it.optString("result")}/6"}?:"—",14,if(entry==null)Muted else Orange,true,Modifier.width(36.dp),TextAlign.Center)
                 Column(horizontalAlignment=Alignment.CenterHorizontally){Copy(r.optInt("points").toString(),if(daily)16 else 24,Purple,true);if(!daily)Copy("PTS",10,Muted)}
@@ -310,7 +322,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
 @Composable fun LeagueMemberView(pk:String,rows:List<JSONObject>,profiles:Map<String,JSONObject>,monday:Long,close:()->Unit) {
     val identity=socialIdentity(pk,profiles);val games=scoreHistory(rows).filter{it.optString("pubkey")==pk&&historyPeriod(it) in monday..monday+6}
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){SocialAction("Back",onClick=close);Avatar(identity.avatar,identity.name,Modifier.size(48.dp));Column{Copy(identity.name,16,bold=true);Copy("${games.sumOf{it.getInt("points")}} pts · ${games.size} games",13,Muted)}};SocialRule()
+        Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){SocialAction("Back",onClick=close);Avatar(identity.avatar,identity.name,Modifier.size(48.dp),owner=identity.pubkey);Column{Copy(identity.name,16,bold=true);Copy("${games.sumOf{it.getInt("points")}} pts · ${games.size} games",13,Muted)}};SocialRule()
         Column(Modifier.padding(horizontal=16.dp,vertical=12.dp).border(1.dp,SocialDivider,RoundedCornerShape(12.dp))){Copy("DAILY RESULTS",13,bold=true,modifier=Modifier.padding(14.dp));SocialRule();if(games.isEmpty())Copy("No games played this week.",13,Muted,modifier=Modifier.padding(16.dp));games.forEach{r->Row(Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){Copy("#${r.optInt("puzzle")}",14,bold=true);Copy("${r.optString("result")}/6",13,Orange);Spacer(Modifier.weight(1f));Copy("${r.optInt("points")} pts",13,bold=true);Copy(LocalDate.ofEpochDay(historyPeriod(r)).format(DateTimeFormatter.ofPattern("EEE, MMM d")),12,Muted)};SocialRule()}}
     }
 }
@@ -322,6 +334,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
     val imagePicker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()){imageUri=it}
     var member by remember{mutableStateOf("")};var search by remember{mutableStateOf("")};var members by remember{mutableStateOf(existing?.let{leagueMembers(it).filter{pk->pk!=account}}.orEmpty())}
     var contacts by remember{mutableStateOf(emptyList<String>())};var profiles by remember{mutableStateOf(emptyMap<String,JSONObject>())};var status by remember{mutableStateOf("Loading mutual follows…")};var loaded by remember{mutableStateOf(false)}
+    WatchPublicProfiles(profiles.keys+account){profiles=profiles+it}
     val scope=rememberCoroutineScope()
     LaunchedEffect(account){try{val follows=contactsOf(PublicNostr.contacts(account));val es=follows.chunked(40).flatMap{PublicNostr.query(JSONObject().put("kinds",array(listOf(3))).put("authors",array(it)).put("limit",it.size*3))};contacts=es.groupBy{it.pubkey}.values.map{it.maxBy{e->e.created}}.filter{account in contactsOf(it)}.map{it.pubkey};profiles=socialProfiles(contacts+members);loaded=true;status="Only mutual follows can be added."}catch(e:CancellationException){throw e}catch(e:Exception){status="Contacts unavailable: ${e.message}"}}
     WebModal(close) {
@@ -332,7 +345,7 @@ private fun hideLeague(context:Context,owner:String,e:Event) { context.getShared
         Copy("Members (${members.size+1}/10 including you)",12,Muted,modifier=Modifier.padding(top=14.dp));Copy("You are included as the creator.",12,Muted)
         WebField("Search mutual follows",search,{search=it})
         (contacts+members).distinct().filter{search.isBlank()||socialIdentity(it,profiles).name.contains(search,true)||it.contains(search,true)}.forEach{pk->val identity=socialIdentity(pk,profiles)
-            Row(Modifier.fillMaxWidth().clickable{members=if(pk in members)members-pk else if(members.size<9)members+pk else members;status=if(members.size>=9)"League permits 10 members including you" else "Only mutual follows can be added."}.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){Copy(if(pk in members)"☑" else "☐",14,Purple);Avatar(identity.avatar,identity.name,Modifier.size(32.dp));Copy(identity.name,13,modifier=Modifier.weight(1f))}
+            Row(Modifier.fillMaxWidth().clickable{members=if(pk in members)members-pk else if(members.size<9)members+pk else members;status=if(members.size>=9)"League permits 10 members including you" else "Only mutual follows can be added."}.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){Copy(if(pk in members)"☑" else "☐",14,Purple);Avatar(identity.avatar,identity.name,Modifier.size(32.dp),owner=identity.pubkey);Copy(identity.name,13,modifier=Modifier.weight(1f))}
         }
         WebField("Paste npub to add",member,{member=it})
         SocialAction("+ Add",modifier=Modifier.padding(top=8.dp)){scope.launch{try{val pk=amberPublicKey(member.trim());check(pk!=account&&members.size<9);check(pk in contactsOf(PublicNostr.contacts(account))&&account in contactsOf(PublicNostr.contacts(pk))){"League members must follow each other"};contacts=(contacts+pk).distinct();members=(members+pk).distinct();profiles=profiles+socialProfiles(listOf(pk));member="";status="Member added"}catch(e:CancellationException){throw e}catch(e:Exception){status=e.message?:"Could not add member"}}}

@@ -1,3 +1,10 @@
+# 1.0.11 (12)
+
+- Keep successfully seen public profile details and actual avatar bytes on-device across rooms, accounts and process restarts.
+- Reuse saved profiles/photos without network reads for 48 hours; render stale success immediately while refreshing quietly afterwards.
+- Retain names, bios and photos through empty/failed refreshes or failed replacement-image downloads.
+- Share one bounded durable avatar cache across native profile surfaces; reuse own signed profile edits immediately while preserving unrelated metadata.
+
 # 1.0.10 (11)
 
 - Show verified public profiles as soon as they arrive, without waiting for slow relays or EOSE.

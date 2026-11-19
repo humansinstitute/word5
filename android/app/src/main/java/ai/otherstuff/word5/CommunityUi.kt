@@ -26,8 +26,6 @@ import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 private const val Lightning="skilledopinion918@walletofsatoshi.com"
@@ -49,7 +47,7 @@ fun copyText(context:Context,text:String) { (context.getSystemService(Context.CL
     BasicTextField(value,onChange,Modifier.fillMaxWidth().heightIn(min=if(multiline)multilineHeight.dp else 36.dp).background(Background,RoundedCornerShape(6.dp)).border(1.dp,Border,RoundedCornerShape(6.dp)).padding(10.dp),textStyle=TextStyle(color=Color.White,fontSize=12.sp,fontFamily=WebFont),singleLine=!multiline,cursorBrush=androidx.compose.ui.graphics.SolidColor(Purple))
 }
 @Composable fun ProfileModal(m:GameModel,close:()->Unit) {
-    val context=LocalContext.current;var name by remember(m.owner){mutableStateOf("")};var about by remember(m.owner){mutableStateOf("")};var picture by remember(m.owner){mutableStateOf("")};var status by remember{mutableStateOf("Loading…")};var loaded by remember(m.owner){mutableStateOf(false)};var original by remember(m.owner){mutableStateOf(JSONObject())}
+    val context=LocalContext.current;var name by remember(m.owner){mutableStateOf(m.profileName)};var about by remember(m.owner){mutableStateOf("")};var picture by remember(m.owner){mutableStateOf(m.profilePicture)};var status by remember(m.owner){mutableStateOf(if(m.profileName.isNotBlank()||m.profilePicture.isNotBlank())"Publishes a kind 0 profile for the active Amber account."else"Loading…")};var loaded by remember(m.owner){mutableStateOf(false)};var original by remember(m.owner){mutableStateOf(JSONObject())}
     var imageUri by remember(m.owner) { mutableStateOf<Uri?>(null) }
     var reload by remember{mutableIntStateOf(0)}
     val totals=statistics(m.state,m.rules)
@@ -58,13 +56,28 @@ fun copyText(context:Context,text:String) { (context.getSystemService(Context.CL
     var correctionConfirm by remember{mutableStateOf(false)}
     BackHandler(correctionConfirm){correctionConfirm=false}
     val picker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { imageUri=it }
-    LaunchedEffect(m.owner,reload) { if(m.owner.isNotEmpty())runCatching { PublicNostr.profile(m.owner) }.onSuccess { original=it;name=it.optString("name",it.optString("display_name"));about=it.optString("about");picture=it.optString("picture");loaded=true;status="Publishes a kind 0 profile for the active Amber account." }.onFailure { status="Could not load profile. Retry before editing: ${it.message}" } }
+    LaunchedEffect(m.owner,reload) {
+        if(m.owner.isNotEmpty()) {
+            fun show(p:JSONObject,verified:Boolean=true){original=p;name=p.optString("name",p.optString("display_name"));about=p.optString("about");picture=p.optString("picture");loaded=verified;status="Publishes a kind 0 profile for the active Amber account."}
+            PublicProfiles.snapshot(m.owner)?.let{show(it,false)}
+            PublicProfiles.verifiedSnapshot(m.owner)?.let{show(it)}
+            try { PublicProfiles.observe(m.owner).collect{u->
+                u.event?.let{e->if(!loaded)show(JSONObject(e.content))}
+                if(u.complete && u.event==null && !loaded && name.isBlank() && picture.isBlank()) {
+                    if(u.allRelaysCompleted){loaded=true;status="Create your public Nostr profile."}
+                    else status="Could not load profile. Retry before editing."
+                }
+            } }
+            catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(_:Exception){if(!loaded && name.isBlank() && picture.isBlank())status="Could not load profile. Retry before editing."}
+        }
+    }
     WebModal(close,cardMaxWidth=420.dp,cardPadding=19.dp,cardRadius=12.dp,heightFraction=.8f,darkness=.72f) {
         ModalHeading("My Profile",close)
         if(m.owner.isEmpty()) { Copy("Sign in with Amber to view and update your Nostr profile.",13,Muted);WebButton("Login with Amber",Modifier.fillMaxWidth().padding(top=12.dp),primary=true) { close();m.login() } }
         else {
             Copy(encodeNpub(m.owner).take(10)+"…"+encodeNpub(m.owner).takeLast(6),12,Muted)
-            Box(Modifier.align(Alignment.CenterHorizontally).padding(top=4.dp,bottom=14.dp).size(96.dp).border(2.dp,Border,RoundedCornerShape(50))) { Avatar(imageUri?.toString()?:picture,name,Modifier.fillMaxSize(),profileFallback=true) }
+            Box(Modifier.align(Alignment.CenterHorizontally).padding(top=4.dp,bottom=14.dp).size(96.dp).border(2.dp,Border,RoundedCornerShape(50))) { Avatar(imageUri?.toString()?:picture,name,Modifier.fillMaxSize(),profileFallback=true,owner=m.owner) }
             WebField("DISPLAY NAME",name,{name=it.take(64)});WebField("DESCRIPTION",about,{about=it.take(280)},true,multilineHeight=92)
             Copy("PROFILE PICTURE",11,Muted,modifier=Modifier.padding(top=10.dp));Copy(imageUri?.lastPathSegment ?: picture.ifEmpty { "No profile picture yet" },12,Muted)
             WebButton("Choose image",Modifier.fillMaxWidth().padding(top=8.dp)) { picker.launch("image/*") }
@@ -74,7 +87,7 @@ fun copyText(context:Context,text:String) { (context.getSystemService(Context.CL
                     if(!loaded)m.notify("Load your existing profile before saving") else m.publicAction { owner ->
                         val chosen=imageUri;val url=if(chosen==null)picture else { val bytes=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { context.contentResolver.openInputStream(chosen)!!.use { input->val b=input.readNBytesBounded(10000001);require(b.size<=10000000);b } };PublicNostr.upload(bytes,context.contentResolver.getType(chosen)?:"image/jpeg",owner,m.amber) }
                         val data=JSONObject(original.toString()).put("name",name).put("display_name",name).put("about",about).put("picture",url)
-                        PublicNostr.publish(m.amber.sign(Event(owner,System.currentTimeMillis()/1000,0,emptyList(),data.toString())));m.chatProfilePublished(owner,data);"Profile published"
+                        val signed=m.amber.sign(Event(owner,PublicProfiles.nextCreated(owner),0,emptyList(),data.toString()));m.chatProfilePublished(signed);PublicNostr.publish(signed);"Profile published"
                     }
                 }
             }
@@ -105,25 +118,18 @@ fun copyText(context:Context,text:String) { (context.getSystemService(Context.CL
 }
 private fun java.io.InputStream.readNBytesBounded(limit:Int):ByteArray { val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(8192);while(out.size()<limit){val n=read(buffer,0,minOf(buffer.size,limit-out.size()));if(n<0)break;out.write(buffer,0,n)};return out.toByteArray() }
 
-private val avatarCache=android.util.LruCache<String,androidx.compose.ui.graphics.ImageBitmap>(64)
-private val avatarRequests=java.util.concurrent.ConcurrentHashMap<String,Mutex>()
-
-@Composable fun Avatar(url:String,label:String,modifier:Modifier=Modifier,profileFallback:Boolean=false) {
+@Composable fun Avatar(url:String,label:String,modifier:Modifier=Modifier,profileFallback:Boolean=false,owner:String="") {
     val context=LocalContext.current
-    var bitmap by remember(url){mutableStateOf(avatarCache.get(url))}
-    LaunchedEffect(url){if(url.startsWith("https://") || url.startsWith("content://"))runCatching{
-      val lock=avatarRequests.computeIfAbsent(url){Mutex()}
-      try { lock.withLock { avatarCache.get(url) ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){
-        val bytes=if(url.startsWith("content://"))context.contentResolver.openInputStream(Uri.parse(url))!!.use{it.readBounded(10000000)} else {
-            val c=java.net.URL(url).openConnection() as javax.net.ssl.HttpsURLConnection
-            try{c.connectTimeout=10000;c.readTimeout=10000;c.inputStream.use{it.readBounded(3000000)}}finally{c.disconnect()}
-        }
-        val bounds=android.graphics.BitmapFactory.Options().apply{inJustDecodeBounds=true};android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,bounds)
-        require(bounds.outWidth in 1..10000 && bounds.outHeight in 1..10000)
-        val options=android.graphics.BitmapFactory.Options().apply{inSampleSize=maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/256)}
-        android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,options)?.asImageBitmap().also { if(it!=null && url.startsWith("https://"))avatarCache.put(url,it) }
-      } } } finally { avatarRequests.remove(url,lock) }
-    }.onSuccess{bitmap=it}}
-
-    Box(modifier.clip(RoundedCornerShape(50)).background(Color(0xFF2A2A2B)),contentAlignment=Alignment.Center){val image=bitmap;if(image!=null)Image(image,null,Modifier.fillMaxSize().then(Modifier),contentScale=androidx.compose.ui.layout.ContentScale.Crop) else Copy(if(profileFallback)label.take(1).uppercase().ifEmpty{"?"} else "👤",if(profileFallback)34 else 20,if(profileFallback)Purple else Muted,bold=profileFallback)}
+    // Key by identity, so a changed URL never clears a successful on-screen avatar.
+    var bitmap by remember(owner.ifEmpty{url}){mutableStateOf<android.graphics.Bitmap?>(null)}
+    val avatarChanges by PublicAvatars.changes.collectAsState()
+    val profileChanges by PublicProfiles.changes.collectAsState()
+    LaunchedEffect(owner,url,avatarChanges,profileChanges){
+        PublicProfiles.initialize(context.filesDir)
+        if(PublicAvatars.isCleared(owner))bitmap=null
+        if(url.startsWith("content://")) {
+            bitmap=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{context.contentResolver.openInputStream(Uri.parse(url))!!.use{decodeAvatar(it.readBounded(3_000_000))}}.getOrNull()}
+        }else PublicAvatars.observe(owner,url).collect{bitmap=it}
+    }
+    Box(modifier.clip(RoundedCornerShape(50)).background(Color(0xFF2A2A2B)),contentAlignment=Alignment.Center){val image=bitmap;if(image!=null)Image(image.asImageBitmap(),"Profile photo for $label",Modifier.fillMaxSize(),contentScale=androidx.compose.ui.layout.ContentScale.Crop) else Copy(if(profileFallback)label.take(1).uppercase().ifEmpty{"?"} else "👤",if(profileFallback)34 else 20,if(profileFallback)Purple else Muted,bold=profileFallback)}
 }

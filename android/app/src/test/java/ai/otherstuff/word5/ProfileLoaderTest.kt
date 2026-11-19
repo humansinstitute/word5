@@ -94,4 +94,30 @@ class ProfileLoaderTest {
             }finally{loader.close()}
         }
     }
+    @Test fun checkedAtMigratesOldEventsRevalidatesUnchangedAndRetainsOfflineExpired()=runBlocking {
+        val file=File.createTempFile("profile-freshness",".json");var now=10_000_000L
+        val e=event(content="{\"name\":\"Years old\",\"about\":\"Full bio\",\"custom\":{\"exact\":true}}")
+        try {
+            file.writeText(array(listOf(e.json())).toString())
+            var cache=ProfileEventCache(file,clock={now});assertEquals(e.id,cache.get(e.pubkey)!!.id);assertFalse(cache.fresh(e.pubkey))
+            Relay{ws,m->send(ws,m,e);end(ws,m)}.use{relay->
+                val loader=ProfileLoader(cache,primary=listOf(relay.url),lookup=emptyList(),bufferMs=1)
+                try{loader.observe(e.pubkey).toList();assertEquals(now,cache.checkedAt(e.pubkey));assertTrue(cache.fresh(e.pubkey))
+                    val requests=relay.requests.get();now+=PROFILE_TTL_MS-1
+                    assertEquals(1,loader.observe(e.pubkey).toList().size);assertEquals(requests,relay.requests.get())
+                    now++;loader.observe(e.pubkey).toList();assertEquals(requests+1,relay.requests.get());assertEquals(now,cache.checkedAt(e.pubkey))
+                }finally{loader.close()}
+            }
+            cache=ProfileEventCache(file,clock={now});assertTrue(cache.fresh(e.pubkey));assertEquals(e.content,cache.get(e.pubkey)!!.content)
+            val checked=cache.checkedAt(e.pubkey);now+=PROFILE_TTL_MS
+            Relay{ws,m->end(ws,m)}.use{empty->
+                val loader=ProfileLoader(cache,primary=listOf(empty.url),lookup=emptyList(),bufferMs=1)
+                try{val results=loader.observe(e.pubkey).toList();assertEquals(e.id,results.first().event!!.id);assertEquals(e.id,results.last().event!!.id)
+                    assertEquals(checked,cache.checkedAt(e.pubkey));assertFalse(cache.fresh(e.pubkey))
+                }finally{loader.close()}
+            }
+            assertEquals(e.content,ProfileEventCache(file,clock={now}).get(e.pubkey)!!.content)
+        }finally{file.delete()}
+    }
+
 }

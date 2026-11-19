@@ -150,7 +150,7 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     val focus=remember(message.id){FocusRequester()}
     val name=member?.name.orEmpty().ifEmpty{if(own)"You" else message.pubkey.take(6)+"…"+message.pubkey.takeLast(4)}
     Row(Modifier.fillMaxWidth(),horizontalArrangement=if(own)Arrangement.End else Arrangement.Start,verticalAlignment=Alignment.Bottom){
-        if(!own)ChatAvatar(member?.picture.orEmpty(),name,Modifier.padding(end=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
+        if(!own)ChatAvatar(message.pubkey,member?.picture.orEmpty(),name,Modifier.padding(end=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
         Column(Modifier.widthIn(max=300.dp).weight(1f,fill=false)) {
             Row(Modifier.padding(horizontal=4.dp).fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                 Text(name,maxLines=1,overflow=TextOverflow.Ellipsis,fontSize=11.sp,color=Color(0xFFD6CBDD),modifier=Modifier.weight(1f))
@@ -161,18 +161,13 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
             Text(profileStatus(member?.profileState?:"loading"),fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().height(20.dp).padding(horizontal=4.dp,vertical=3.dp))
             Copy(message.text,14,modifier=Modifier.padding(top=6.dp).background(if(own)Color(0xFF7036AD)else Color(0xFF28232E),RoundedCornerShape(topStart=16.dp,topEnd=16.dp,bottomStart=if(own)16.dp else 4.dp,bottomEnd=if(own)4.dp else 16.dp)).border(1.dp,if(own)Color(0xFF8547C2)else Color(0xFF3C3443),RoundedCornerShape(topStart=16.dp,topEnd=16.dp,bottomStart=if(own)16.dp else 4.dp,bottomEnd=if(own)4.dp else 16.dp)).padding(12.dp))
         }
-        if(own)ChatAvatar(member?.picture.orEmpty(),name,Modifier.padding(start=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
+        if(own)ChatAvatar(message.pubkey,member?.picture.orEmpty(),name,Modifier.padding(start=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
     }
 }
 
 /** Always retains initials underneath failed or loading pictures. */
-@Composable private fun ChatAvatar(url:String,name:String,modifier:Modifier=Modifier){
-    Box(modifier.background(Border,androidx.compose.foundation.shape.CircleShape).semantics{contentDescription="Profile photo for $name"},contentAlignment=Alignment.Center){
-        Copy(name.take(1).uppercase().ifEmpty{"?"},18,bold=true)
-        var bitmap by remember(url){mutableStateOf<android.graphics.Bitmap?>(null)}
-        LaunchedEffect(url){bitmap=chatProfileBitmap(url)}
-        bitmap?.let{androidx.compose.foundation.Image(it.asImageBitmap(),"Profile photo for $name",Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.CircleShape),contentScale=androidx.compose.ui.layout.ContentScale.Crop)}
-    }
+@Composable private fun ChatAvatar(owner:String,url:String,name:String,modifier:Modifier=Modifier){
+    Avatar(url,name,modifier.semantics{contentDescription="Profile photo for $name"},profileFallback=true,owner=owner)
 }
 @Composable fun ChatProfileDialog(pubkey:String,member:ChatMember,close:()->Unit){
     val clipboard=androidx.compose.ui.platform.LocalClipboard.current
@@ -183,7 +178,7 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     androidx.compose.ui.window.Dialog(onDismissRequest=close){
         LaunchedEffect(pubkey){withFrameNanos{};copyFocus.requestFocus()}
         Column(Modifier.widthIn(max=360.dp).heightIn(max=520.dp).background(Panel,RoundedCornerShape(18.dp)).padding(20.dp).verticalScroll(rememberScrollState()),horizontalAlignment=Alignment.CenterHorizontally){
-            ChatAvatar(member.picture,member.name,Modifier.size(72.dp))
+            ChatAvatar(pubkey,member.picture,member.name,Modifier.size(72.dp))
             Text(member.name.ifEmpty{"Nostr profile"},fontSize=20.sp,color=Color.White,modifier=Modifier.padding(top=12.dp),maxLines=3,overflow=TextOverflow.Ellipsis)
             profileStatus(member.profileState).takeIf{it.isNotEmpty()}?.let{Copy(it,12,Muted,modifier=Modifier.padding(top=8.dp))}
             Copy(member.bio.ifEmpty{"No public bio"},13,Muted,modifier=Modifier.fillMaxWidth().padding(top=12.dp))

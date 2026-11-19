@@ -43,7 +43,6 @@ class GameModel(app: Application): AndroidViewModel(app) {
     var profileName by mutableStateOf(""); private set
     var profilePicture by mutableStateOf(""); private set
     private var profileJob: Job? = null
-    private var profileAccount = ""
     private var publicJob: Job? = null
     private var syncJob: Job? = null
     private var generation = 0
@@ -69,7 +68,10 @@ class GameModel(app: Application): AndroidViewModel(app) {
     init { PublicProfiles.initialize(app.filesDir); load(); if(owner.isNotEmpty()) message = "Backup pending; reconnecting automatically."; viewModelScope.launch { delay(500); if(completed()) openResult() } }
     private fun file(key: String = owner) = File(getApplication<Application>().filesDir, "state-${key.ifEmpty { "guest" }}.json")
     private fun load() {
+        profileJob?.cancel();profileJob=null
         profileName = prefs.getString("name-$owner", "").orEmpty(); profilePicture = prefs.getString("picture-$owner", "").orEmpty(); syncEnabled=prefs.getBoolean("auto-sync-$owner",true)
+        PublicProfiles.seed(owner,profileName,profilePicture)
+        if(owner.isNotEmpty() && (profileName.isNotBlank()||profilePicture.isNotBlank()))chatProfiles.seed(owner,org.json.JSONObject().put("name",profileName).put("picture",profilePicture))
         draft = ""; revealing = false; resultOpen = false; state = State()
         if (file().exists()) try { state = Codec.decode(file().readText(), owner, rules) }
         catch(_: Exception) { message = "Local save could not be read. Server restore will be attempted; damaged file retained." }
@@ -177,10 +179,22 @@ class GameModel(app: Application): AndroidViewModel(app) {
         if(activePeriod != Rules.period()) { activePeriod = Rules.period(); chatTick(); draft = ""; revealing = false; resultOpen = false; state = state.copy(); message = "A new daily puzzle is ready." }
     }
     fun onResume() { rollover(); chatTick(); if(!chatVisible)sync(); refreshProfile() }
+    private fun applyOwnProfile(account:String,data:org.json.JSONObject,localEdit:Boolean=false){
+        if(owner!=account)return
+        val name=data.optString("display_name").ifBlank{data.optString("name")}
+        if(localEdit||name.isNotBlank())profileName=name
+        if(localEdit||safeProfilePicture(data.optString("picture")).isNotEmpty())profilePicture=data.optString("picture")
+        prefs.edit().putString("name-$account",profileName).putString("picture-$account",profilePicture).apply()
+        chatProfiles.put(account,ownDisplaySnapshot(data,profileName,profilePicture),PublicProfiles.checkedAt(account))
+    }
     private fun refreshProfile() {
-        if(owner.isEmpty() || profileAccount == owner) return
-        val account=owner; profileAccount=account; profileJob?.cancel()
-        profileJob=viewModelScope.launch { runCatching { PublicNostr.profile(account) }.onSuccess { if(owner==account) { profileName=it.optString("display_name").ifEmpty { it.optString("name") };profilePicture=it.optString("picture");prefs.edit().putString("name-$account",profileName).putString("picture-$account",profilePicture).apply() } }.onFailure { if(owner==account)profileAccount="" } }
+        if(owner.isEmpty() || profileJob?.isActive==true)return
+        val account=owner;profileJob?.cancel()
+        profileJob=viewModelScope.launch {
+            PublicProfiles.snapshot(account)?.let{applyOwnProfile(account,it)}
+            try {PublicProfiles.observe(account).collect{u->if(u.event!=null)PublicProfiles.snapshot(account)?.let{applyOwnProfile(account,it)}}}
+            catch(e:CancellationException){throw e}catch(_:Exception){ /* Keep the local identity. */ }
+        }
     }
     fun publicAction(action: suspend (String) -> String) {
         if(owner.isEmpty()) { notify("Sign in with Amber first"); return }
@@ -336,13 +350,15 @@ class GameModel(app: Application): AndroidViewModel(app) {
         val rows=chatClient.read(account,room);currentChat(account,epoch,period)
         val old=chatViews[period]?:return;if(old.room!==room)return
         val outcomes=chatClient.results(account,room)
+        rows.map{it.pubkey}.distinct().forEach{key->PublicProfiles.snapshot(key)?.let{chatProfiles.seed(key,it)}}
+        currentChat(account,epoch,period)
         val members=rows.map{it.pubkey}.distinct().associateWith{pubkey->chatRoomMember(chatProfiles.value(pubkey).profile,old.members[pubkey],outcomes[pubkey].orEmpty()).copy(profileState=chatProfiles.value(pubkey).state)}
         chatViews=chatViews+(period to old.copy(messages=rows,members=members));chatStatus="";loadChatMembers(account,epoch,room,rows)
     }
     private fun loadChatMembers(account:String,epoch:Int,room:ChatRoom,rows:List<ChatMessage>){
         if(!chatVisible||chatMetadataJob?.isActive==true)return
         val keys=rows.map{it.pubkey}.distinct()
-        val reads=chatProfiles.begin(keys,profileOnline())
+        val reads=chatProfiles.begin(keys,true)
         fun update(){
             if(owner!=account||chatEpoch!=epoch||chatRoom!==room||!chatVisible||!room.active(owner,System.currentTimeMillis()))return
             val view=chatViews[room.period]?:return
@@ -357,7 +373,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
                     PublicProfiles.observe(read.key).collect { result ->
                         if(owner==account&&chatEpoch==epoch&&chatRoom===room&&chatVisible&&room.active(owner,System.currentTimeMillis())) {
                             val profile=result.event?.let{parseChatProfile(it.content)}
-                            if(result.complete)chatProfiles.finish(read,profile,profile==null&&!result.allRelaysCompleted)
+                            if(result.complete)chatProfiles.finish(read,profile,profile==null&&!result.allRelaysCompleted,result.checkedAt)
                             else if(profile!=null)chatProfiles.progress(read,profile)
                             update()
                         }
@@ -366,10 +382,13 @@ class GameModel(app: Application): AndroidViewModel(app) {
             }}
         }
     }
-    fun chatProfilePublished(account:String,data:org.json.JSONObject){if(owner==account){chatProfiles.put(account,data);chatRoom?.let{loadChatMembers(owner,chatEpoch,it,chatMessages)}}}
-    private fun profileOnline():Boolean {
-        val cm=getApplication<android.app.Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-        return cm.activeNetwork?.let{cm.getNetworkCapabilities(it)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)}==true
+    suspend fun chatProfilePublished(event:Event){
+        require(event.pubkey==owner && event.kind==0 && event.verified())
+        check(PublicProfiles.accept(event,localEdit=true)){"Profile changed; reload before saving"}
+        run {
+            applyOwnProfile(event.pubkey,org.json.JSONObject(event.content),localEdit=true)
+            chatViews=chatViews.mapValues{(_,view)->view.copy(members=view.members+(event.pubkey to chatRoomMember(org.json.JSONObject(event.content),view.members[event.pubkey],view.members[event.pubkey]?.result.orEmpty()).copy(profileState="ready")))}
+        }
     }
 
     fun shareText(): String = resultShareText(state,rules)
