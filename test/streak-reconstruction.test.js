@@ -41,11 +41,12 @@ const context = {
     setItem() {},
   },
   navigator: { clipboard: { writeText() {} } },
-  window: { __WORD5_TEST__: true },
+  window: { __WORD5_TEST__: true, addEventListener() {} },
 };
 context.globalThis = context;
 
 vm.createContext(context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "js", "profile-reader.js"), "utf8"), context, { filename: "js/profile-reader.js" });
 vm.runInContext(source, context, { filename: "js/nostr-ui.js" });
 
 const { buildWord5Stats, dedupeWord5Entries, isNextWord5Puzzle, applyCorrectionBaseline } =

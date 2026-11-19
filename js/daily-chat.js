@@ -42,13 +42,14 @@
   }
   async function choosePeriod(period) {
     if(!activePeriod(period)||period===selectedPeriod)return;
-    saveView();cancelSelectedApproval();generation++;selectedPeriod=period;forceScroll=true;
+    saveView();cancelSelectedApproval();generation++;clearSenderWatches();selectedPeriod=period;forceScroll=true;
     sessionStorage.setItem(selectionKey(),String(period));restoreView();renderRooms();
     const room=selectedRoom(),run=generation;if(room){await hydrateMessages(room,run);if(run===generation&&selectedRoom()===room)await read(null,true);}
   }
   const messagePrefix = 'word5-chat-messages:';
   let messageBinding = '', messageCursor = null, messageRecords = new Map(), retryAt = 0, readFailures = 0;
   function clearMessages() {
+    clearSenderWatches();
     messageBinding=''; messageCursor=null; messageRecords=new Map();roomResults={};
     $('chatMessages')?.replaceChildren();
   }
@@ -133,15 +134,16 @@
     for(const period of roomViews.keys())if(!activePeriod(period))roomViews.delete(period);
     for(const [binding,ticket] of sendRequests)if(ticket.owner!==identity||!activePeriod(ticket.period))sendRequests.delete(binding);
     if(!activePeriod(selectedPeriod)) {
-      cancelSelectedApproval();generation++;selectedPeriod=day();sessionStorage.setItem(selectionKey(),String(selectedPeriod));restoreView();
+      cancelSelectedApproval();generation++;clearSenderWatches();selectedPeriod=day();sessionStorage.setItem(selectionKey(),String(selectedPeriod));restoreView();
     } else if(before&&!selectedRoom()) {
-      cancelSelectedApproval();generation++;roomViews.delete(selectedPeriod);clearMessages();if($('chatText'))$('chatText').value='';
+      cancelSelectedApproval();generation++;clearSenderWatches();roomViews.delete(selectedPeriod);clearMessages();if($('chatText'))$('chatText').value='';
     }
     renderRooms();
     const nav=$('chatNav');if(nav)nav.hidden=!rooms.length&&Date.now()>=completionHintUntil;
   }
   async function refresh() {
     if(!activePeriod(selectedPeriod)){cancelSelectedApproval();selectedPeriod=day();clearMessages();if($('chatText'))$('chatText').value='';}
+    clearSenderWatches();
     const run = ++generation;
     retryAt=0;
     if (!signedIn()) {
@@ -165,7 +167,12 @@
       }
       prune(); renderRooms();
       const oldRoom=selectedRoom();
-      if (oldRoom) await hydrateMessages(oldRoom,run);
+      if (oldRoom) {
+        await hydrateMessages(oldRoom,run);
+        if(run===generation)for(const {node,event} of messageRecords.values()){
+          node.dataset.metadataGeneration=String(run);enrichSender(node,event.pubkey,oldRoom,run,identity);
+        }
+      }
       if (run!==generation) return;
       const pending=await pendingRequest();
       if(run!==generation)return;
@@ -233,46 +240,23 @@
   }
   // Metadata is optional: display messages immediately, then enrich their fixed
   // header/avatar slots without replacing nodes or moving the reader's scroll.
-  const senderCache=new Map(), senderQueue=[];
-  let senderLookups=0;
-  function drainSenders() {
-    while (senderLookups<3 && senderQueue.length) {
-      const job=senderQueue.shift(); senderLookups++;
-      void job().finally(()=>{ senderLookups--; drainSenders(); });
-    }
-  }
-  function senderDetails(pubkey, period) {
-    const key=`${period}:${pubkey}`;
-    if (!senderCache.has(key)) {
-      if (senderQueue.length>=200) return Promise.resolve({});
-      if (senderCache.size>=256) senderCache.delete(senderCache.keys().next().value);
-      senderCache.set(key,new Promise(resolve=>{
-        senderQueue.push(async()=>{
-          if (!activePeriod(period)) { resolve({}); return; }
-          let timeout;
-          const profile=Promise.race([
-            Promise.resolve().then(()=>window.NostrUI?.loadProfile(pubkey)),
-            new Promise(resolve=>{ timeout=setTimeout(()=>resolve(null),4000); })
-          ]).catch(()=>null).finally(()=>clearTimeout(timeout));
-          resolve({profile:await profile});
-        });
-        drainSenders();
-      }));
-    }
-    return senderCache.get(key);
-  }
+  const senderWatches=new Map();
+  function clearSenderWatches(){for(const stop of senderWatches.values())stop();senderWatches.clear();window.Word5Profiles?.close();}
   function enrichSender(item, pubkey, room, run, viewer) {
-    void senderDetails(pubkey,room.period).then(({profile})=>{
+    senderWatches.get(item)?.();
+    const stop=window.Word5Profiles.watch(pubkey,({profile,status})=>{
       if (run!==generation || identity!==viewer || selectedRoom()!==room || room.expiresAt<=Date.now() || !item.isConnected) return;
       const sender=item.querySelector('.message-name'), avatar=item.querySelector('.message-avatar');
+      const statusLabel=window.Word5Profiles.statusText(status);
+      const statusNode=item.querySelector('.message-profile-status');if(statusNode)statusNode.textContent=statusLabel;
+      avatar.title=statusLabel||'View public profile';avatar.setAttribute('aria-label',`View profile for ${profile?.name||pubkey.slice(0,8)}${statusLabel?' · '+statusLabel:''}`);avatar.setAttribute('aria-busy',String(status==='loading'));
+      avatar.onclick=()=>window.Word5Profiles.open(pubkey,avatar);
       const profileSignature=JSON.stringify([profile?.name||'',profile?.picture||'']);
       if(item.dataset.profileApplied!==profileSignature){
       item.dataset.profileApplied=profileSignature;
-      if (profile?.name) {
-        sender.textContent=profile.name;
-        item.querySelector('.message-own').hidden=pubkey!==viewer || profile.name==='You';
-        avatar.textContent=profile.name.trim().split(/\s+/).slice(0,2).map(word=>Array.from(word)[0]).join('').toUpperCase();
-      }
+      sender.textContent=profile?.name || (pubkey===viewer?'You':`${pubkey.slice(0,6)}…${pubkey.slice(-4)}`);
+      item.querySelector('.message-own').hidden=pubkey!==viewer || !profile?.name || profile.name==='You';
+      avatar.textContent=profile?.name ? profile.name.trim().split(/\s+/).slice(0,2).map(word=>Array.from(word)[0]).join('').toUpperCase() : (pubkey===viewer?'ME':pubkey.slice(0,2).toUpperCase());
       if (profile?.picture) {
         // Revalidate even if a caller provides a cached/custom profile resolver.
         try {
@@ -286,7 +270,8 @@
       }
       }
       applyResult(item,pubkey,room);
-    }).catch(()=>{});
+    });
+    senderWatches.set(item,stop);
   }
   function applyResult(item,pubkey,room) {
       const outcome=roomResults[pubkey];
@@ -302,7 +287,7 @@
   function messageNode(event,text) {
           const own = event.pubkey === identity;
           const item = document.createElement('li'); item.className=`chat-message${own ? ' own' : ''}`; item.dataset.messageId=event.id;
-          const avatar=document.createElement('div'); avatar.className='message-avatar'; avatar.textContent=own ? 'ME' : event.pubkey.slice(0,2).toUpperCase(); avatar.setAttribute('aria-hidden','true');
+          const avatar=document.createElement('button'); avatar.type='button'; avatar.className='message-avatar'; avatar.textContent=own ? 'ME' : event.pubkey.slice(0,2).toUpperCase();
           avatar.style.setProperty('--avatar-hue',String(parseInt(event.pubkey.slice(0,6),16)%360));
           const content=document.createElement('div'); content.className='message-content';
           item.dataset.senderPubkey=event.pubkey;
@@ -312,7 +297,8 @@
           const message=document.createElement('p'); message.className='message-bubble'; message.textContent=text;
           const ownLabel=document.createElement('span');ownLabel.className='message-own';ownLabel.textContent=own ? 'You' : '';ownLabel.hidden=true;
           const badge=document.createElement('span');badge.className='message-result';
-          meta.append(sender,ownLabel,badge,time); content.append(meta,message); item.append(avatar,content); return item;
+          const profileStatus=document.createElement('div');profileStatus.className='message-profile-status';profileStatus.textContent='Loading profile…';
+          meta.append(sender,ownLabel,badge,time); content.append(meta,profileStatus,message); item.append(avatar,content); return item;
   }
   async function mergeMessages(events,room,run,reset=false) {
     const {verifyEvent,getEventHash}=await import('https://esm.sh/nostr-tools@2?bundle');
@@ -333,7 +319,7 @@
     while(next.size>200) next.delete(next.keys().next().value);
     const list=$('chatMessages'),history=$('chatHistory');
     const follow=forceScroll||!history||history.scrollHeight-history.scrollTop-history.clientHeight<100;
-    for (const [id,record] of messageRecords) if(!next.has(id)) record.node.remove();
+    for (const [id,record] of messageRecords) if(!next.has(id)) {senderWatches.get(record.node)?.();senderWatches.delete(record.node);record.node.remove();}
     let position=0;
     for (const record of next.values()) { if(list.children[position]!==record.node) list.insertBefore(record.node,list.children[position]||null);position++; }
     messageRecords=next;
@@ -401,7 +387,7 @@
     if (nextIdentity===identity && p?.auth_mode===identityMode) return;
     if ($('chatText')) $('chatText').value='';
     completionHintUntil=0;
-    cancelSelectedApproval();generation++; identity=null; rooms=[];roomViews.clear();selectedPeriod=day();forceScroll=true;clearMessages();
+    cancelSelectedApproval();generation++;clearSenderWatches(); identity=null; rooms=[];roomViews.clear();selectedPeriod=day();forceScroll=true;clearMessages();
     Word5ChatCrypto.prune(sessionStorage,nextIdentity);
     try { if (JSON.parse(sessionStorage.getItem(pendingKey()) || 'null')?.pubkey!==nextIdentity) sessionStorage.removeItem(pendingKey()); } catch { sessionStorage.removeItem(pendingKey()); }
     renderRooms(); if (!usesAmber() || $('chatMessages')) void refresh();

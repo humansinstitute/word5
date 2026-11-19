@@ -7,7 +7,7 @@ import '../js/chat-crypto.js';
 const {chromium}=await import(process.env.WORD5_PLAYWRIGHT_MODULE || 'playwright');
 const root=resolve(import.meta.dir,'..'), service=new Word5Service({rootDir:root,dbPath:':memory:',relays:[],gamestrRelays:[]}),chat=new DailyChat(service),period=getCurrentPeriodId();
 const keys=Array.from({length:7},()=>generateSecretKey()),pks=keys.map(getPublicKey),profiles=new Map(),profileRequests=new Map(),historyRequests=new Map();
-let lateProfile=true,lateHistory=true;
+let lateProfile=true,lateHistory=true,failProfile=false;
 const check=(ok:unknown,label:string)=>{if(!ok)throw new Error(label);console.log(`PASS ${label}`);};
 for(let i=0;i<keys.length;i++){
  const won=i!==1,answer=getWordForPeriod(service.answers,period);
@@ -44,6 +44,7 @@ const server=Bun.serve({port:0,async fetch(req,server){const url=new URL(req.url
  },websocket:{message(ws,data){const frame=JSON.parse(String(data));if(frame[0]!=='REQ')return;const id=frame[1],pk=frame[2].authors?.[0];
  if(frame[2].kinds?.[0]!==0){ws.send(JSON.stringify(['EOSE',id]));return;}
  profileRequests.set(pk,(profileRequests.get(pk)||0)+1);
+ if(failProfile&&pk===pks[5]&&profileRequests.get(pk)===1){ws.close();return;}
  const send=()=>{for(const event of profiles.get(pk)||[])ws.send(JSON.stringify(['EVENT',id,event]));ws.send(JSON.stringify(['EOSE',id]));};
  if(lateProfile)setTimeout(send,1500);else send();
  }}});
@@ -88,6 +89,18 @@ try{
  check(await page.locator('#chatHistory').evaluate(el=>el.scrollTop)===position,'asynchronous metadata does not jump reader scroll');
  await page.locator('#chatRefresh').click();await message(0).locator('.message-name').getByText('Pete Winn',{exact:true}).waitFor();
  check(historyRequests.size===0&&[...profileRequests.values()].every(count=>count===1),'sender metadata deduplicates across messages/reads and shared own profile UI');
+ const avatar=message(0).locator('.message-avatar');await avatar.focus();await page.keyboard.press('Enter');
+ const dialog=page.getByRole('dialog',{name:'Public profile'});await dialog.waitFor();
+ check(await dialog.locator('.public-profile-name').textContent()==='Pete Winn'&&await dialog.locator('.public-profile-bio').textContent()==='unchanged profile details','avatar keyboard activation opens read-only public profile');
+ await dialog.locator('.public-profile-npub').getByText(nip19.npubEncode(pks[0]),{exact:true}).waitFor();
+ await context.grantPermissions(['clipboard-read','clipboard-write']);await dialog.getByRole('button',{name:'Copy npub',exact:true}).click();
+ check(await page.evaluate(()=>navigator.clipboard.readText())===nip19.npubEncode(pks[0]),'profile copy uses full npub');
+ await page.keyboard.press('Tab');check(await page.evaluate(()=>document.querySelector('dialog')?.contains(document.activeElement)),'native dialog contains keyboard focus');
+ await page.keyboard.press('Escape');check(await avatar.evaluate(el=>el===document.activeElement),'Escape closes dialog and restores avatar focus');
+ await message(3).locator('.message-avatar').click();await dialog.waitFor();check(await dialog.locator('.public-profile-name').textContent()==='<img src=x onerror=alert(1)>'&&await dialog.locator('img').count()===0,'dialog renders hostile metadata as text and rejects unsafe picture');
+ await page.mouse.click(2,2);check(!await dialog.isVisible(),'backdrop closes profile');
+ await message(5).locator('.message-avatar').click();await dialog.waitFor();check(await dialog.locator('.public-profile-status').textContent()==='No public profile','missing metadata is distinct from failed retrieval');await page.keyboard.press('Escape');
+
 
  await page.setViewportSize({width:320,height:667});await page.waitForTimeout(100);
  check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'320px sender headers/photos/results stay within viewport');
@@ -107,6 +120,16 @@ try{
  check(await ownNode.locator('.message-name').textContent()==='You'&&await ownNode.locator('.message-own').isHidden(),'missing own profile displays a single You fallback');
  await ownFallback.context.close();
  profiles.set(pks[0],[metadata(0,{picture:`${server.url}avatar.svg`})]);const photoOnly=await newContext();await photoOnly.page.goto(`${server.url}chat.html`);const photoNode=photoOnly.page.locator(`[data-sender-pubkey="${pks[0]}"]`);await photoNode.locator('img').waitFor();await photoOnly.page.evaluate(()=>(window as any).Word5Chat.refresh());await photoOnly.page.evaluate(()=>(window as any).Word5Chat.refresh());check(await photoNode.locator('img').count()===1,'photo-only profiles remain idempotent across repeated reads');await photoOnly.context.close();profiles.delete(pks[0]);
+ // A failed relay request recovers automatically with delayed backoff, keeping message nodes.
+ failProfile=true;lateProfile=false;profileRequests.clear();profiles.set(pks[5],[metadata(5,{display_name:'Recovered later',about:'delayed success'})]);
+ const recovery=await newContext();await recovery.page.goto(`${server.url}chat.html`);
+ const recovering=recovery.page.locator(`[data-sender-pubkey="${pks[5]}"]`);await recovering.locator('.message-profile-status').getByText('Profile unavailable · retrying later',{exact:true}).waitFor();
+ await recovering.evaluate(el=>(window as any).originalMessage=el);const firstCount=profileRequests.get(pks[5]);await recovery.page.waitForTimeout(600);
+ check(profileRequests.get(pks[5])===firstCount,'failure cooldown prevents immediate retry storm');
+ await recovering.locator('.message-name').getByText('Recovered later',{exact:true}).waitFor({timeout:15000});
+ check(await recovering.evaluate(el=>el===(window as any).originalMessage)&&profileRequests.get(pks[5])===2,'failure recovers later without replacing message DOM');
+ await recovering.locator('.message-avatar').click();await recovery.page.getByRole('dialog').waitFor();await recovery.page.evaluate(()=>(window as any).NostrSession.updatePlayer({auth_mode:'session',linked_pubkey:null,privkey:null}));
+ check(!await recovery.page.getByRole('dialog').isVisible(),'identity switch closes public profile');await recovery.context.close();failProfile=false;
  // Slow results must not repopulate a room after daily rollover or an account switch.
  for(const mode of ['rollover','identity']){
   lateProfile=true;lateHistory=true;

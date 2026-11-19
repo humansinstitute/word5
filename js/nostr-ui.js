@@ -7,8 +7,6 @@
     profilePreviewUrl: "",
     profilePubkey: "",
   };
-  const profileCache = new Map();
-  const profileInflight = new Map();
   const BLOSSOM_UPLOAD_SERVER = "https://blossom.primal.net";
   const WORD5_STORAGE_KEY = "words-game";
   const WORD5_ROTATION_HOURS = 24;
@@ -926,40 +924,32 @@
     });
   }
 
-  async function loadProfile(pubkey, options = {}) {
-    if (!/^[0-9a-f]{64}$/.test(pubkey || '')) return null;
-    if (!options.force && profileCache.has(pubkey)) return profileCache.get(pubkey);
-    if (!options.force && profileInflight.has(pubkey)) return profileInflight.get(pubkey);
-    const operation=(async()=>{
-      let pool, relays;
-      try {
-        const {SimplePool,verifyEvent,getEventHash}=await import("https://esm.sh/nostr-tools@2?bundle");
-        pool=new SimplePool(); relays=getRelayList();
-        const events=await pool.querySync(relays,{kinds:[0],authors:[pubkey],limit:5},{maxWait:3000});
-        const event=events?.filter(event=>{
-          try { return event.kind===0 && event.pubkey===pubkey && event.content.length<=16000 && verifyEvent(event) && getEventHash(event)===event.id; }
-          catch { return false; }
-        }).sort((a,b)=>b.created_at-a.created_at)[0];
-        if (!event) return null;
-        const data=JSON.parse(event.content);
-        if (!data || typeof data!=='object' || Array.isArray(data)) return null;
-        const text=value=>typeof value==='string' ? value : '';
-        let picture='';
-        try {
-          const url=new URL(text(data.picture));
-          if (['https:','http:'].includes(url.protocol) && !url.username && !url.password) picture=url.href;
-        } catch {}
-        return {name:(text(data.display_name).trim() || text(data.name).trim()).slice(0,64),about:text(data.about),picture,data};
-      } catch { return null; }
-      finally { if (pool) { try { pool.close(relays); } catch {} } }
-    })();
-    profileInflight.set(pubkey,operation);
-    try {
-      const profile=await operation;
-      if (profileInflight.get(pubkey)===operation) profileCache.set(pubkey,profile);
-      return profile;
-    } finally { if (profileInflight.get(pubkey)===operation) profileInflight.delete(pubkey); }
+  async function fetchPublicProfile(pubkey) {
+    let importTimeout;
+    const {verifyEvent,getEventHash}=await Promise.race([
+      import("https://esm.sh/nostr-tools@2?bundle"),
+      new Promise((_,reject)=>{importTimeout=setTimeout(()=>reject(new Error('Profile library timeout')),5000);})
+    ]).finally(()=>clearTimeout(importTimeout));
+    // Observe actual EOSE frames: querySync also resolves empty on connection failures/timeouts.
+    const responses=await Promise.allSettled(getRelayList().map(url=>new Promise((resolve,reject)=>{
+      let socket,timeout,done=false;const events=[],id='word5-profile';
+      const finish=(error)=>{if(done)return;done=true;clearTimeout(timeout);try{socket?.close();}catch{}error?reject(error):resolve(events);};
+      timeout=setTimeout(()=>finish(new Error('Profile timeout')),3500);
+      try{socket=new WebSocket(url);socket.onopen=()=>socket.send(JSON.stringify(['REQ',id,{kinds:[0],authors:[pubkey],limit:5}]));
+        socket.onerror=()=>finish(new Error('Profile connection failed'));socket.onclose=()=>finish(new Error('Profile connection closed'));
+        socket.onmessage=({data})=>{try{const frame=JSON.parse(data);if(frame[1]!==id)return;if(frame[0]==='EOSE')finish();else if(frame[0]==='CLOSED')finish(new Error('Profile query rejected'));else if(frame[0]==='EVENT'&&events.length<20)events.push(frame[2]);}catch{}};
+      }catch(error){finish(error);}
+    })));
+    const events=responses.flatMap(result=>result.status==='fulfilled'?result.value:[]);
+    const event=events.filter(event=>{try{return event.kind===0&&event.pubkey===pubkey&&event.content.length<=16000&&verifyEvent(event)&&getEventHash(event)===event.id;}catch{return false;}}).sort((a,b)=>b.created_at-a.created_at)[0];
+    if(!event){if(!responses.some(result=>result.status==='fulfilled'))throw new Error('Profile relays unavailable');return null;}
+    let data;try{data=JSON.parse(event.content);}catch{return null;}
+    if(!data||typeof data!=='object'||Array.isArray(data))return null;
+    const text=value=>typeof value==='string'?value:'';
+    return {name:(text(data.display_name).trim()||text(data.name).trim()).slice(0,64),about:text(data.about).slice(0,16000),picture:window.Word5Profiles.safeUrl(text(data.picture)),data};
   }
+  window.Word5Profiles.fetch=fetchPublicProfile;
+  function loadProfile(pubkey,options={}) { return window.Word5Profiles.load(pubkey,options); }
 
   function renderTimerIdentityLabel(text) {
     const el = $("timerIdentityLabel");
@@ -981,6 +971,7 @@
     }
 
     const profile = await loadProfile(pubkey);
+    if(getIdentityPubkey(window.NostrSession?.getPlayer())!==pubkey)return;
     renderTimerIdentityLabel(profile?.name || "");
   }
 
@@ -1227,8 +1218,7 @@
         picture: nextData.picture || "",
         data: nextData,
       };
-      profileInflight.delete(pubkey);
-      profileCache.set(pubkey, nextProfile);
+      window.Word5Profiles.set(pubkey,nextProfile);
       renderTimerIdentityLabel(nextProfile.name || "");
       status.textContent = "Profile updated.";
       showToast("Published profile");
