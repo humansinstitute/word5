@@ -110,3 +110,35 @@ test('new clients list exactly completed today/yesterday, reuse keys and keep pe
  expect(()=>chat.request(event(other,'read',{period}),'read',now)).toThrow('Finish');expect(()=>chat.request(event(sk,'read',{period:period-2}),'read',now)).toThrow('expired');
  expect(()=>chat.request(event(sk,'rooms',{includePrevious:'true'}),'rooms',now)).toThrow('option');
 });
+
+test('v2 reply and reaction ciphertext uses unchanged server contract, hides from legacy decrypt and binds actor/room',async()=>{
+ const {service,chat}=fixture(),a=generateSecretKey(),b=generateSecretKey();finish(service,a);finish(service,b);
+ const room=rooms(chat,a)[0],pk=getPublicKey(a),target='a'.repeat(64);
+ for(const [i,payload] of [{v:2,type:'reply',target,text:'Private reply 🧡'},{v:2,type:'like',target,active:true,revision:1},{v:2,type:'like',target,active:false,revision:2}].entries()){
+  const at=now+i*2100,nonce=randomBytes(16).toString('hex'),encrypted=await cryptoUI.encrypt(payload,room.key,period,pk,nonce),signed=event(a,'send',{period,nonce,...encrypted},at);
+  expect(chat.request(signed,'send',at)).toMatchObject({ok:true,id:signed.id});expect(await cryptoUI.decrypt(JSON.parse(signed.content),room.key,pk)).toEqual(payload);
+  expect(signed.content).not.toContain('Private reply');expect(signed.content).not.toContain(target);expect(signed.tags).toEqual([['schema','word5.chat.v1']]);
+  const key=await crypto.subtle.importKey('raw',Buffer.from(room.key,'base64'),'AES-GCM',false,['decrypt']);
+  await expect(crypto.subtle.decrypt({name:'AES-GCM',iv:Buffer.from(encrypted.iv,'base64'),additionalData:new TextEncoder().encode(`word5.chat.v1:${period}:${pk}:${nonce}`)},key,Buffer.from(encrypted.ciphertext,'base64'))).rejects.toThrow();
+  await expect(cryptoUI.decrypt({...JSON.parse(signed.content),period:period-1},room.key,pk)).rejects.toThrow();
+  await expect(cryptoUI.decrypt(JSON.parse(signed.content),room.key,getPublicKey(b))).rejects.toThrow();
+ }
+});
+test('strict v2 action allowlist rejects arbitrary quote/author, unknown controls and oversized payloads',async()=>{
+ const target='a'.repeat(64),reply={v:2,type:'reply',target,text:'ok'},like={v:2,type:'like',target,active:true,revision:1};
+ for(const value of [{...reply,author:'forged'},{...reply,quote:'forged'},{...reply,v:3},{...reply,type:'text'},{...reply,target:'other-room'},{...reply,text:''},{...reply,text:'🔥'.repeat(501)},{...like,active:'true'},{...like,revision:0},{...like,revision:1.1},{...like,revision:Number.MAX_SAFE_INTEGER+1},null])expect(()=>cryptoUI.action(value)).toThrow();
+ expect(cryptoUI.action(reply)).toEqual(reply);expect(cryptoUI.action(like)).toEqual(like);
+});
+test('reactions deduplicate actor/target, unlike advances and revision wins over receipt/time order',()=>{
+ const target='a'.repeat(64),actor='b'.repeat(64),other='c'.repeat(64);
+ const row=(pubkey:string,revision:number,active:boolean,id:string,t=target)=>({event:{pubkey,id},payload:{v:2,type:'like',target:t,revision,active}});
+ const rows=[row(actor,2,false,'b'),row(actor,1,true,'c'),row(actor,2,false,'b'),row(other,1,true,'a'),row(actor,3,true,'a','d'.repeat(64))];
+ expect(cryptoUI.reactions(rows,target,actor)).toEqual({count:1,own:false,revision:2});
+ rows.push(row(actor,3,true,'a'));expect(cryptoUI.reactions(rows,target,actor)).toEqual({count:2,own:true,revision:3});
+ rows.push(row(actor,3,false,'z'));expect(cryptoUI.reactions(rows,target,actor)).toEqual({count:1,own:false,revision:3});
+});
+test('native-generated signed reply decrypts identically in browser crypto',async()=>{
+ const vector=await Bun.file(new URL('../android/app/src/test/resources/chat-actions-native-vector.json',import.meta.url)).json();
+ const {verifyEvent,getEventHash}=await import('nostr-tools');expect(verifyEvent(vector.event)).toBe(true);expect(getEventHash(vector.event)).toBe(vector.event.id);
+ const decoded=await cryptoUI.decrypt(JSON.parse(vector.event.content),vector.key,vector.event.pubkey);expect(decoded).toEqual({v:2,type:'reply',target:decoded.target,text:'Reply'});expect(decoded.target).toMatch(/^[0-9a-f]{64}$/);
+});

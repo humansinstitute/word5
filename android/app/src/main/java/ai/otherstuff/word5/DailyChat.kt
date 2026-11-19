@@ -22,7 +22,27 @@ class ChatRoom(val owner: String, val period: Long, val date: String, val word: 
     fun active(account: String, now: Long) = !discarded && owner == account && period in (Rules.period(now)-1)..Rules.period(now) && now < expiresAt
     fun discard() { discarded=true;key.fill(0) }
 }
-data class ChatMessage(val id: String, val pubkey: String, val createdAt: Long, val text: String)
+data class ChatMessage(val id: String, val pubkey: String, val createdAt: Long, val text: String, val type:String="text", val target:String="", val active:Boolean=false, val revision:Long=0, val quoteAuthor:String="", val quoteText:String="", val likes:Int=0, val liked:Boolean=false)
+/** Projection is bounded by the retained encrypted event window, never copied quote claims. */
+fun chatReaction(rows:Collection<ChatMessage>,target:String,actor:String):ChatMessage? = rows.filter{it.type=="like"&&it.target==target&&it.pubkey==actor}.maxWithOrNull(compareBy<ChatMessage>{it.revision}.thenBy{it.id})
+fun chatConversation(rows:Collection<ChatMessage>,owner:String):List<ChatMessage> {
+    val originals=rows.filter{it.type!="like"}.associateBy{it.id}
+    return originals.values.map { row->
+        val actors=rows.filter{it.type=="like"&&it.target==row.id}.map{it.pubkey}.distinct()
+        val original=originals[row.target]
+        val projected=row.copy(quoteAuthor=original?.pubkey.orEmpty(),quoteText=original?.text?.codePoints()?.limit(160)?.toArray()?.let{String(it,0,it.size)}.orEmpty(),likes=actors.count{chatReaction(rows,row.id,it)?.active==true},liked=chatReaction(rows,row.id,owner)?.active==true)
+        if(projected==row)row else projected
+    }
+}
+fun chatActionPayload(value:JSONObject):JSONObject {
+    require(value.opt("type") is String && value.opt("target") is String && value.longValue("v")==2L && value.getString("target").matches(Regex("[0-9a-f]{64}"))){"Invalid chat action"}
+    when(value.getString("type")) {
+        "reply"->{value.exact("v","type","target","text");require(value.opt("text") is String);val text=value.getString("text");require(text.isNotBlank()&&text.toByteArray(Charsets.UTF_8).size<=2000)}
+        "like"->{value.exact("v","type","target","active","revision");value.bool("active");require(value.longValue("revision") in 1..9007199254740991L)}
+        else->error("Unsupported chat action")
+    }
+    return value
+}
 data class ChatMember(val name: String = "", val picture: String = "", val result: String = "", val bio:String = "", val profileState:String = "ready")
 fun chatMember(profile: JSONObject?, history: JSONObject?, pubkey: String, period: Long): ChatMember {
     fun text(data: JSONObject?, key: String) = (data?.opt(key) as? String).orEmpty()
@@ -47,7 +67,7 @@ fun chatRoomResults(value:JSONObject?,period:Long):Map<String,String> = buildMap
 class DailyChatClient(private val signer: NativeSigner, private val api: ChatApi = ChatApi { path,event -> PublicNostr.api(path,event) }, private val clock: () -> Long = System::currentTimeMillis) {
     private val random=SecureRandom()
     private var requestEpoch=0
-    private data class PendingSend(val textHash:String,val event:Event)
+    private data class PendingSend(val textHash:String,val event:Event,val type:String="text",val target:String="")
     private class RoomCache(val owner:String,val period:Long,var expiresAt:Long) {
         var cursor:String?=null
         var pending:PendingSend?=null
@@ -66,7 +86,7 @@ class DailyChatClient(private val signer: NativeSigner, private val api: ChatApi
         caches.entries.removeAll { (id,entry)->entry.owner==owner && entry.period==room.period && id!=key }
         return caches.getOrPut(key){RoomCache(owner,room.period,room.expiresAt)}.also{it.expiresAt=room.expiresAt}
     }
-    fun cachedMessages(owner:String,room:ChatRoom)=cache(owner,room).messages.values.toList()
+    fun cachedMessages(owner:String,room:ChatRoom)=chatConversation(cache(owner,room).messages.values,owner)
     fun results(owner:String,room:ChatRoom)=cache(owner,room).results.toMap()
     private fun nonce()=ByteArray(16).also(random::nextBytes).joinToString(""){"%02x".format(it)}
     private fun draft(owner:String,body:JSONObject)=Event(owner,clock()/1000,30078,listOf(listOf("schema",CHAT_SCHEMA)),body.toString())
@@ -113,21 +133,35 @@ class DailyChatClient(private val signer: NativeSigner, private val api: ChatApi
     private fun current(owner:String,room:ChatRoom,entry:RoomCache,epoch:Int) {
         requireActive(owner,room);check(epoch==requestEpoch && caches[scope(owner,room)]===entry){"Chat selection or account changed"}
     }
-    suspend fun send(owner:String,room:ChatRoom,text:String):String {
-        val entry=cache(owner,room);val epoch=requestEpoch;val hash=sha256(text.trim())
+    suspend fun send(owner:String,room:ChatRoom,text:String,reply:String?=null):String = sendPayload(owner,room,text,reply?.let{JSONObject().put("v",2).put("type","reply").put("target",it).put("text",text.trim())})
+    suspend fun like(owner:String,room:ChatRoom,target:String):String {
+        val entry=cache(owner,room);require(entry.messages[target]?.type in listOf("text","reply")){"Original message unavailable"}
+        val previous=chatReaction(entry.messages.values,target,owner)
+        val pending=entry.pending
+        // Retrying an uncertain operation must keep its exact active state/revision.
+        if(pending!=null){check(pending.type=="like"&&pending.target==target){"Previous send is unconfirmed. Retry the same action first."};return sendPayload(owner,room,"",null,pending)}
+        val action=JSONObject().put("v",2).put("type","like").put("target",target).put("active",previous?.active!=true).put("revision",(previous?.revision?:0)+1)
+        return sendPayload(owner,room,"",action)
+    }
+    private suspend fun sendPayload(owner:String,room:ChatRoom,text:String,action:JSONObject?,retry:PendingSend?=null):String {
+        val entry=cache(owner,room);val epoch=requestEpoch;val hash=retry?.textHash?:sha256((if(action==null)"text:"else"action:")+(action?.toString()?:text.trim()))
+        check(entry.pending==null||entry.pending?.textHash==hash){"Previous send is unconfirmed. Retry the same message or refresh before sending another."}
         val previous=entry.pending?.takeIf{it.textHash==hash}
         if(previous!=null){
-            if(read(owner,room).any{it.id==previous.event.id}){if(entry.pending===previous)entry.pending=null;return previous.event.id}
-            check(kotlin.math.abs(clock()-previous.event.created*1000)<=60000){"Previous send could not be confirmed. Refresh this room, then edit the draft before sending again."}
+            read(owner,room)
+            if(entry.messages.containsKey(previous.event.id)){if(entry.pending===previous)entry.pending=null;return previous.event.id}
+            check(kotlin.math.abs(clock()-previous.event.created*1000)<=60000){"Previous send could not be confirmed. Refresh this room to confirm it before sending again."}
         }
         val event=previous?.event ?:run {
-            val messageNonce=nonce();val body=encryptChat(text,room,owner,messageNonce,random).put("action","send").put("period",room.period).put("nonce",messageNonce)
+            val messageNonce=nonce();val body=encryptChat(text,room,owner,messageNonce,random,action).put("action","send").put("period",room.period).put("nonce",messageNonce)
             signed(draft(owner,body))
         }
-        current(owner,room,entry,epoch);entry.pending=PendingSend(hash,event)
+        current(owner,room,entry,epoch);entry.pending=previous?:PendingSend(hash,event,action?.getString("type")?:"text",action?.getString("target").orEmpty())
         val response=try{api.post("api/chat/send",event)}catch(e:ApiRejection){if(e.definitive&&entry.pending?.event?.id==event.id)entry.pending=null;throw e}
         if(!response.optBoolean("ok")){if(entry.pending?.event?.id==event.id)entry.pending=null;error(response.optString("error","Chat unavailable; retry"))}
         current(owner,room,entry,epoch);val id=response.getString("id");require(id==event.id)
+        entry.messages[event.id]=decryptChat(event,room)
+        while(entry.messages.size>200)entry.messages.remove(entry.messages.keys.first())
         if(entry.pending?.event?.id==event.id)entry.pending=null
         return id
     }
@@ -144,29 +178,39 @@ class DailyChatClient(private val signer: NativeSigner, private val api: ChatApi
             try{val row=rows.getJSONObject(index);known[row.optString("id")]?:decryptChat(Event.parse(row),room)}catch(e:CancellationException){throw e}catch(_:Exception){null}
         }.distinctBy{it.id}}
         current(owner,room,entry,epoch)
-        if(reset)entry.messages.clear();decoded.forEach{entry.messages[it.id]=it}
+        if(reset)entry.messages.clear();decoded.forEach{entry.messages.remove(it.id);entry.messages[it.id]=it}
         while(entry.messages.size>200)entry.messages.remove(entry.messages.keys.first())
         entry.cursor=if(delta)nextCursor else decoded.lastOrNull()?.id
         entry.results=chatRoomResults(response.optJSONObject("results"),room.period)
-        return entry.messages.values.toList()
+        return chatConversation(entry.messages.values,owner)
     }
 }
 
-private fun chatAad(period: Long, owner: String, nonce: String) = "word5.chat.v1:$period:$owner:$nonce".toByteArray(Charsets.UTF_8)
-fun encryptChat(text: String, room: ChatRoom, owner: String, nonce: String, random: SecureRandom = SecureRandom()): JSONObject {
+private fun chatAad(period: Long, owner: String, nonce: String, version:Int=1) = "word5.chat.v$version:$period:$owner:$nonce".toByteArray(Charsets.UTF_8)
+fun encryptChat(text: String, room: ChatRoom, owner: String, nonce: String, random: SecureRandom = SecureRandom(), action:JSONObject?=null): JSONObject {
     require(nonce.matches(Regex("[0-9a-f]{32}")))
-    val bytes=text.trim().toByteArray(Charsets.UTF_8);require(bytes.size in 1..2000) { "Use 1–2000 UTF-8 bytes of text" }
+    val version=if(action==null)1 else 2
+    val bytes=(action?.let{chatActionPayload(it).toString()}?:text.trim()).toByteArray(Charsets.UTF_8);require(bytes.size in 1..(if(version==1)2000 else 3000)) { "Use 1–2000 UTF-8 bytes of text" }
     val iv=ByteArray(12).also(random::nextBytes)
-    val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(room.key,"AES"),GCMParameterSpec(128,iv));cipher.updateAAD(chatAad(room.period,owner,nonce))
+    val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,SecretKeySpec(room.key,"AES"),GCMParameterSpec(128,iv));cipher.updateAAD(chatAad(room.period,owner,nonce,version))
     return JSONObject().put("iv",Base64.getEncoder().encodeToString(iv)).put("ciphertext",Base64.getEncoder().encodeToString(cipher.doFinal(bytes)))
 }
 fun decryptChat(event: Event, room: ChatRoom): ChatMessage {
+    require(event.content.toByteArray(Charsets.UTF_8).size<=7000)
     require(event.verified() && event.kind==30078 && event.tags==listOf(listOf("schema",CHAT_SCHEMA)))
     val body=JSONObject(event.content);body.exact("action","period","nonce","iv","ciphertext")
     require(body.getString("action")=="send" && body.longValue("period")==room.period && body.getString("nonce").matches(Regex("[0-9a-f]{32}")))
+    require(body.getString("iv").matches(Regex("[A-Za-z0-9+/]{16}")) && body.getString("ciphertext").length in 24..4096 && body.getString("ciphertext").length%4==0 && body.getString("ciphertext").matches(Regex("[A-Za-z0-9+/]+={0,2}")))
     val iv=Base64.getDecoder().decode(body.getString("iv"));val encrypted=Base64.getDecoder().decode(body.getString("ciphertext"));require(iv.size==12 && encrypted.size in 17..3016)
-    val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,SecretKeySpec(room.key,"AES"),GCMParameterSpec(128,iv));cipher.updateAAD(chatAad(room.period,event.pubkey,body.getString("nonce")))
-    val plain=cipher.doFinal(encrypted);require(plain.size in 1..2000)
+    fun decrypt(version:Int):ByteArray {
+        val cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,SecretKeySpec(room.key,"AES"),GCMParameterSpec(128,iv));cipher.updateAAD(chatAad(room.period,event.pubkey,body.getString("nonce"),version))
+        return cipher.doFinal(encrypted)
+    }
+    var version=1
+    val plain=try{decrypt(1)}catch(_:javax.crypto.AEADBadTagException){version=2;decrypt(2)}
+    require(plain.size in 1..(if(version==1)2000 else 3000))
     val text=Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(plain)).toString()
-    return ChatMessage(event.id,event.pubkey,event.created,text)
+    if(version==1)return ChatMessage(event.id,event.pubkey,event.created,text)
+    val action=chatActionPayload(JSONObject(text));val type=action.getString("type")
+    return ChatMessage(event.id,event.pubkey,event.created,if(type=="reply")action.getString("text")else"",type,action.getString("target"),if(type=="like")action.bool("active")else false,if(type=="like")action.longValue("revision")else 0)
 }

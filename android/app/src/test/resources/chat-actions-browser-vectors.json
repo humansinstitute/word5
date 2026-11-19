@@ -1,0 +1,74 @@
+{
+  "period": 20768,
+  "key": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+  "vectors": [
+    {
+      "action": {
+        "v": 2,
+        "type": "reply",
+        "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "text": "Browser → native 🧡"
+      },
+      "event": {
+        "kind": 30078,
+        "created_at": 1794355300,
+        "tags": [
+          [
+            "schema",
+            "word5.chat.v1"
+          ]
+        ],
+        "content": "{\"action\":\"send\",\"period\":20768,\"nonce\":\"11111111111111111111111111111111\",\"iv\":\"l5LYOt3EwVTH4h+H\",\"ciphertext\":\"x+h2i06bBdrOpR4eUMvj47RprjjfpnNIG8SFbx4QPJ+oZ4N2S8QRihuhJcHcegC92IZpMyLFaJs+9rLPZ8UZQ4NByKagIP9rvPBSXMEJPeTJtmyRCvq0Vi2bLX/mtXOzNtJDPhz4ZqHMw1IEriqv3U0Nmb/ATAMVswuHkR6ih4xt/9pCCSCNnA7LBxarK1eNevbG\"}",
+        "pubkey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
+        "id": "c002463e85490e6e4c85964358223b2a0cfeaf26aa2d54df3eaf0cc4ff439cb7",
+        "sig": "6612c08e2761fd90664e92c45f159b13923a6f9fb980445e2291e6db36e3763b4455d6aec6f663b6f732694ecdc845ee03d7eba0f0a5ea850623f1f459a7a462"
+      }
+    },
+    {
+      "action": {
+        "v": 2,
+        "type": "like",
+        "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "active": true,
+        "revision": 5
+      },
+      "event": {
+        "kind": 30078,
+        "created_at": 1794355300,
+        "tags": [
+          [
+            "schema",
+            "word5.chat.v1"
+          ]
+        ],
+        "content": "{\"action\":\"send\",\"period\":20768,\"nonce\":\"11111111111111111111111111111111\",\"iv\":\"AdOMAA+cQxa47KHe\",\"ciphertext\":\"0776Qpz037cqVYJL9A0UWKRKijkuRhQWCP/vAk8PYDhcjJnRj6QQWw8aHyFyTUfKw1gOSxxvqSGaZCSrzpYCbLz31/HreQm0eWW4YsD9N0A58g9kR6KSlUWEyDzX6GGOYAw9X73mvgellGXF7HGXh0pJoNvSX8wWdpwxXRzpfI8pIVoyoeUfrm1IUxY=\"}",
+        "pubkey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
+        "id": "4e76c544b3a9f5fbac4fec43a134b2ac7f2698150d87ebcd728123dfde9c3322",
+        "sig": "2ce8c26304370780349f5487a8fd62ddc9b058acd912b2a244bd2d68f917bfe7f0258fc9ab78b3d46424b34b4113ca0ad3648637457ec847a3765a84b5c390b9"
+      }
+    },
+    {
+      "action": {
+        "v": 2,
+        "type": "like",
+        "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "active": false,
+        "revision": 6
+      },
+      "event": {
+        "kind": 30078,
+        "created_at": 1794355300,
+        "tags": [
+          [
+            "schema",
+            "word5.chat.v1"
+          ]
+        ],
+        "content": "{\"action\":\"send\",\"period\":20768,\"nonce\":\"11111111111111111111111111111111\",\"iv\":\"XVgo2lKX2wvWVoUa\",\"ciphertext\":\"p0Pm98LOZjSjszTRWBO7+12K3uMW2+Am84GExV/CtgDzL+41IiKPvkPv859H4YzirIsCBIFqcHRVD9wG3yknVZEXRWZnXVkqTg/GR+gWwEBxJpepZ0SbZsVjiBjH4JnzqLSPmp31JmsPL7N2nkJuB0zRLxlU4AQOjIhzCmicyCxAS4n28Fok6q4rzfFs\"}",
+        "pubkey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
+        "id": "2ed9c6866bd0619db44e81d3ec0865bc03a2680a2486965aec4f38ddbb685355",
+        "sig": "6854c784e2264edfe9fe2b404b3f8893ee8532e3fb6fec187036becfb1d110949ecb3feed0d3359af83eeb0a1056f0c0513876a348fffcc8393046205948a02e"
+      }
+    }
+  ]
+}

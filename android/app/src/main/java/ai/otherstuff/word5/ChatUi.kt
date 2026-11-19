@@ -77,7 +77,7 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
             ChatToolbar(m.selectedChatPeriod,today,m.chatRoom,m.chatBusy,now,onMenu,{confirm=false;m.selectChatDay(it)},{if(m.chatBusy)m.cancelChat()else m.refreshChat()})
             Box(Modifier.weight(1f)) {
                 val room=m.chatRoom
-                if(room!=null)ChatConversation(room,m.owner,m.chatMessages,m.chatMembers,m.chatDraft,m.chatStatus,m.chatBusy,now,m::editChat,m::sendChat,{if(m.chatBusy)m.cancelChat()else m.refreshChat()},back,scrolls.getOrPut(room.period){ChatScrollMemory()})
+                if(room!=null)ChatConversation(room,m.owner,m.chatMessages,m.chatMembers,m.chatDraft,m.chatStatus,m.chatBusy,now,m::editChat,m::sendChat,{if(m.chatBusy)m.cancelChat()else m.refreshChat()},back,scrolls.getOrPut(room.period){ChatScrollMemory()},m.chatReply,m::replyChat,m::likeChat)
                 else Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
                     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween){Copy(if(yesterday)"Yesterday’s chat"else"Daily chat",21,bold=true);WebButton("Back",compact=true,onClick=back)}
                     Copy(if(yesterday)"Yesterday’s verified finishers"else"One group for today’s finishers",14,Muted,modifier=Modifier.padding(top=12.dp))
@@ -109,7 +109,8 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
 }
 
 /** Native-only view; debug review fixtures cannot call a signer or API. */
-@Composable fun ChatConversation(room:ChatRoom,owner:String,messages:List<ChatMessage>,members:Map<String,ChatMember>,draft:String,status:String,busy:Boolean,now:Long,onDraft:(String)->Unit,onSend:()->Unit,onRefresh:()->Unit,onBack:()->Unit,scroll:ChatScrollMemory?=null) {
+@Composable fun ChatConversation(room:ChatRoom,owner:String,messages:List<ChatMessage>,members:Map<String,ChatMember>,draft:String,status:String,busy:Boolean,now:Long,onDraft:(String)->Unit,onSend:()->Unit,onRefresh:()->Unit,onBack:()->Unit,scroll:ChatScrollMemory?=null,reply:String?=null,onReply:(String?)->Unit={},onLike:(String)->Unit={}) {
+    val composerFocus=remember(room,owner){FocusRequester()}
     var selectedProfile by remember(room,owner){mutableStateOf<String?>(null)}
     var profileFocus by remember(room,owner){mutableStateOf<FocusRequester?>(null)}
     val profileScope=rememberCoroutineScope()
@@ -130,14 +131,21 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     Column(Modifier.fillMaxSize().imePadding()) {
         if(messages.isEmpty())Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp),contentAlignment=Alignment.Center){Column(horizontalAlignment=Alignment.CenterHorizontally){Copy("You made it. Let’s talk.",18,bold=true);Copy("How did you find today’s word? Be the first to start the conversation.",13,Muted,modifier=Modifier.padding(top=12.dp))}}
         else LazyColumn(Modifier.weight(1f).fillMaxWidth(),state=list,contentPadding=PaddingValues(12.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            items(messages,key={it.id}){message->ChatMessageRow(message,members[message.pubkey],message.pubkey==owner){focus->profileFocus=focus;selectedProfile=message.pubkey}}
+            items(messages,key={it.id}){message->ChatMessageRow(message,members[message.pubkey],message.pubkey==owner,members,busy,{onReply(message.id);composerFocus.requestFocus()},{onLike(message.id)}){focus->profileFocus=focus;selectedProfile=message.pubkey}}
         }
         Column(Modifier.fillMaxWidth().background(Panel).padding(12.dp)) {
+            if(reply!=null) {
+                val original=messages.firstOrNull{it.id==reply}
+                Row(Modifier.fillMaxWidth().padding(bottom=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                    Copy("Replying to "+(original?.let{(members[it.pubkey]?.name?.ifEmpty{null}?:it.pubkey.take(8))+": "+it.text.take(160)}?:"Original message unavailable"),12,Muted,modifier=Modifier.weight(1f))
+                    Box(Modifier.size(44.dp).semantics{contentDescription="Cancel reply"}.clickable{onReply(null)},contentAlignment=Alignment.Center){Copy("×",22)}
+                }
+            }
             if(status.isNotEmpty())Copy(status,12,Color(0xFFD8B4FE),modifier=Modifier.padding(bottom=10.dp))
             Row(Modifier.fillMaxWidth().background(Color(0xFF292330),RoundedCornerShape(14.dp)).border(1.dp,Color(0xFF483751),RoundedCornerShape(14.dp)).padding(6.dp),verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.weight(1f).heightIn(min=42.dp,max=120.dp).padding(8.dp)){
                     if(draft.isEmpty())Copy("Message the group…",15,Muted)
-                    BasicTextField(draft,onDraft,Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).semantics{contentDescription="Message the group"},textStyle=TextStyle(color=Color.White,fontSize=16.sp,fontFamily=WebFont),cursorBrush=SolidColor(Purple))
+                    BasicTextField(draft,onDraft,Modifier.focusRequester(composerFocus).fillMaxWidth().verticalScroll(rememberScrollState()).semantics{contentDescription="Message the group"},textStyle=TextStyle(color=Color.White,fontSize=16.sp,fontFamily=WebFont),cursorBrush=SolidColor(Purple))
                 }
                 Box(Modifier.height(42.dp).width(58.dp).background(if(!busy&&draft.isNotBlank())Purple else Border,RoundedCornerShape(10.dp)).clickable(enabled=!busy&&draft.isNotBlank(),onClick=onSend),contentAlignment=Alignment.Center){Copy("Send",13,bold=true)}
             }
@@ -146,7 +154,8 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     }
     selectedProfile?.let{key->ChatProfileDialog(key,members[key]?:ChatMember(profileState="loading")){selectedProfile=null;profileScope.launch{withFrameNanos{};runCatching{profileFocus?.requestFocus()}}}}
 }
-@Composable private fun ChatMessageRow(message:ChatMessage,member:ChatMember?,own:Boolean,onProfile:(FocusRequester)->Unit) {
+@Composable private fun ChatMessageRow(message:ChatMessage,member:ChatMember?,own:Boolean,members:Map<String,ChatMember>,busy:Boolean,onReply:()->Unit,onLike:()->Unit,onProfile:(FocusRequester)->Unit) {
+    var actions by remember(message.id){mutableStateOf(false)}
     val focus=remember(message.id){FocusRequester()}
     val name=member?.name.orEmpty().ifEmpty{if(own)"You" else message.pubkey.take(6)+"…"+message.pubkey.takeLast(4)}
     Row(Modifier.fillMaxWidth(),horizontalArrangement=if(own)Arrangement.End else Arrangement.Start,verticalAlignment=Alignment.Bottom){
@@ -159,7 +168,18 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
                 Copy(DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(message.createdAt)),10,Muted)
             }
             Text(profileStatus(member?.profileState?:"loading"),fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().height(20.dp).padding(horizontal=4.dp,vertical=3.dp))
-            Copy(message.text,14,modifier=Modifier.padding(top=6.dp).background(if(own)Color(0xFF7036AD)else Color(0xFF28232E),RoundedCornerShape(topStart=16.dp,topEnd=16.dp,bottomStart=if(own)16.dp else 4.dp,bottomEnd=if(own)4.dp else 16.dp)).border(1.dp,if(own)Color(0xFF8547C2)else Color(0xFF3C3443),RoundedCornerShape(topStart=16.dp,topEnd=16.dp,bottomStart=if(own)16.dp else 4.dp,bottomEnd=if(own)4.dp else 16.dp)).padding(12.dp))
+            Column(Modifier.padding(top=6.dp).background(if(own)Color(0xFF7036AD)else Color(0xFF28232E),RoundedCornerShape(14.dp)).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="Message actions"){actions=!actions}.padding(12.dp)) {
+                if(message.type=="reply") {
+                    val author=members[message.quoteAuthor]?.name?.ifEmpty{null}?:message.quoteAuthor.take(8)
+                    Copy(if(message.quoteAuthor.isEmpty())"Original message unavailable"else "$author: ${message.quoteText}",12,Color(0xFFD8B4FE),modifier=Modifier.padding(bottom=8.dp))
+                }
+                Copy(message.text,14)
+            }
+            if(actions)Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.heightIn(min=44.dp).clickable(enabled=!busy,onClick=onLike).padding(8.dp).semantics{contentDescription=if(message.liked)"Unlike message"else"Like message"}){Copy(if(message.liked)"♥ Unlike"else"♡ Like",12)}
+                Box(Modifier.heightIn(min=44.dp).clickable{onReply();actions=false}.padding(8.dp).semantics{contentDescription="Reply to message"}){Copy("Reply",12)}
+            }
+            if(message.likes>0)Box(Modifier.heightIn(min=36.dp).clickable(enabled=!busy,onClick=onLike).padding(6.dp).semantics{contentDescription="${message.likes} likes. "+if(message.liked)"Liked by you. Unlike"else"Like message"}){Copy("${if(message.liked)"♥"else"♡"} ${message.likes}",12,Color(0xFFD8B4FE))}
         }
         if(own)ChatAvatar(message.pubkey,member?.picture.orEmpty(),name,Modifier.padding(start=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
     }

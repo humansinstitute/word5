@@ -8,7 +8,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import java.io.File
 
-private data class ChatRoomView(val room:ChatRoom,val messages:List<ChatMessage> = emptyList(),val members:Map<String,ChatMember> = emptyMap(),val draft:String="")
+private data class ChatRoomView(val room:ChatRoom,val messages:List<ChatMessage> = emptyList(),val members:Map<String,ChatMember> = emptyMap(),val draft:String="",val reply:String?=null)
 
 class GameModel(app: Application): AndroidViewModel(app) {
     val rules = Rules(app.assets.open("answers.txt").bufferedReader().readLines().map { it.trim() }.filter { it.length == 5 }, app.assets.open("wla.txt").bufferedReader().readLines().map { it.trim() }.filter { it.length == 5 })
@@ -57,6 +57,9 @@ class GameModel(app: Application): AndroidViewModel(app) {
     val chatMessages get()=chatViews[selectedChatPeriod]?.messages.orEmpty()
     val chatMembers get()=chatViews[selectedChatPeriod]?.members.orEmpty()
     val chatDraft get()=chatViews[selectedChatPeriod]?.draft.orEmpty()
+    val chatReply get()=chatViews[selectedChatPeriod]?.reply
+    fun replyChat(target:String?) {chatTick();val view=chatViews[selectedChatPeriod]?:return;if(target!=null&&view.messages.none{it.id==target})return;chatViews=chatViews+(selectedChatPeriod to view.copy(reply=target))}
+    fun likeChat(target:String)=chatAction(true){account,epoch,period->val view=chatViews[period]?:return@chatAction;chatStatus="Sending encrypted reaction…";chatClient.like(account,view.room,target);currentChat(account,epoch,period);installConfirmedChat(account,period,view.room);readChat(account,epoch,period,view.room)}
     private val chatProfiles=ChatProfiles()
     var chatStatus by mutableStateOf("Finish today’s puzzle to unlock its chat."); private set
     var chatBusy by mutableStateOf(false); private set
@@ -342,9 +345,13 @@ class GameModel(app: Application): AndroidViewModel(app) {
     fun sendChat()=chatAction(true){account,epoch,period->
         val view=chatViews[period]?:error("This room requires a verified completion")
         val text=view.draft;check(text.isNotBlank()){ "Write a message first" };chatStatus="Sending encrypted message…"
-        chatClient.send(account,view.room,text);currentChat(account,epoch,period)
-        val latest=chatViews[period];if(latest?.room===view.room&&latest.draft==text)chatViews=chatViews+(period to latest.copy(draft=""))
-        chatStatus="";readChat(account,epoch,period,view.room)
+        chatClient.send(account,view.room,text,view.reply);currentChat(account,epoch,period)
+        val latest=chatViews[period];if(latest?.room===view.room)chatViews=chatViews+(period to latest.copy(draft=if(latest.draft==text)""else latest.draft,reply=if(latest.reply==view.reply)null else latest.reply))
+        installConfirmedChat(account,period,view.room);chatStatus="";readChat(account,epoch,period,view.room)
+    }
+    private fun installConfirmedChat(account:String,period:Long,room:ChatRoom) {
+        val view=chatViews[period]?:return;if(view.room!==room)return
+        chatViews=chatViews+(period to view.copy(messages=chatClient.cachedMessages(account,room)))
     }
     private suspend fun readChat(account:String,epoch:Int,period:Long,room:ChatRoom){
         val rows=chatClient.read(account,room);currentChat(account,epoch,period)

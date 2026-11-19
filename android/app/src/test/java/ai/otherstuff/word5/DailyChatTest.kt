@@ -242,4 +242,72 @@ class DailyChatTest {
         profile.put("picture","https://example.com/avatar.png");assertEquals("https://example.com/avatar.png",chatMember(profile,history,pubkey,123).picture)
         history.put("currentResult","0");assertEquals("",chatMember(profile,history,pubkey,123).result)
     }
+
+    @Test fun browserV2VectorsAndStrictControls() {
+        val fixture=JSONObject(javaClass.classLoader!!.getResourceAsStream("chat-actions-browser-vectors.json")!!.bufferedReader().readText())
+        val period=fixture.getLong("period");val rows=fixture.getJSONArray("vectors")
+        repeat(rows.length()) { index->
+            val vector=rows.getJSONObject(index);val event=Event.parse(vector.getJSONObject("event"));val action=vector.getJSONObject("action")
+            val room=ChatRoom(event.pubkey,period,"","JOKER",(period+2)*86400000,Base64.getDecoder().decode(fixture.getString("key")))
+            val decoded=decryptChat(event,room);assertEquals(action.getString("type"),decoded.type);assertEquals(action.getString("target"),decoded.target)
+            if(decoded.type=="reply")assertEquals(action.getString("text"),decoded.text)else {assertEquals(action.getBoolean("active"),decoded.active);assertEquals(action.getLong("revision"),decoded.revision)}
+            assertThrows(Exception::class.java){decryptChat(event.copy(pubkey="f".repeat(64)),room)}
+        }
+        val reply=JSONObject().put("v",2).put("type","reply").put("target","a".repeat(64)).put("text","ok")
+        for(extra in listOf("author","quote","unknown"))assertThrows(Exception::class.java){chatActionPayload(JSONObject(reply.toString()).put(extra,"forged"))}
+        assertThrows(Exception::class.java){chatActionPayload(JSONObject(reply.toString()).put("v",3))}
+        assertThrows(Exception::class.java){chatActionPayload(JSONObject(reply.toString()).put("text","🔥".repeat(501)))}
+    }
+    @Test fun reactionOrderingDeduplicationAndQuotesUseOnlyVerifiedOriginals() {
+        val target="a".repeat(64);val actor="b".repeat(64);val other="c".repeat(64)
+        val original=ChatMessage(target,other,1,"Original text")
+        val unlike=ChatMessage("e".repeat(64),actor,1,"","like",target,false,2)
+        val like=ChatMessage("f".repeat(64),actor,1,"","like",target,true,1)
+        val second=ChatMessage("d".repeat(64),other,1,"","like",target,true,1)
+        val reply=ChatMessage("9".repeat(64),actor,1,"Reply text","reply",target)
+        val rows=listOf(original,unlike,like,like,second,reply)
+        val view=chatConversation(rows,actor);assertEquals(2,view.size);assertEquals(1,view.first().likes);assertFalse(view.first().liked)
+        assertEquals(other,view.last().quoteAuthor);assertEquals(original.text,view.last().quoteText)
+        val missing=chatConversation(listOf(reply,like,unlike),actor).single();assertEquals("",missing.quoteAuthor);assertEquals("",missing.quoteText);assertEquals(0,missing.likes)
+        val nested=reply.copy(id="8".repeat(64),target=reply.id);assertEquals("Reply text",chatConversation(rows+nested,actor).last().quoteText)
+        assertEquals(0,chatConversation(listOf(original,like.copy(target="0".repeat(64))),actor).single().likes)
+    }
+    @Test fun twoActorsToggleReplyAndRecoverUncertainReactionWithoutDuplicate()=runBlocking {
+        val a=Signer();val b=Signer(2);val server=Server();server.completed+=listOf(a.owner,b.owner);server.delta=true
+        val ca=DailyChatClient(a,server){server.now};val cb=DailyChatClient(b,server){server.now}
+        val ra=ca.open(a.owner)!!;val rb=cb.open(b.owner)!!
+        val target=ca.send(a.owner,ra,"Original 🧡");cb.read(b.owner,rb)
+        cb.like(b.owner,rb,target);var rows=ca.read(a.owner,ra);assertEquals(1,rows.single().likes);assertFalse(rows.single().liked)
+        ca.like(a.owner,ra,target);rows=ca.read(a.owner,ra);assertEquals(2,rows.single().likes);assertTrue(rows.single().liked)
+        cb.like(b.owner,rb,target);rows=ca.read(a.owner,ra);assertEquals(1,rows.single().likes)
+        server.loseAck=true;try{ca.like(a.owner,ra,target);fail()}catch(_:IOException){}
+        val count=server.messages.size;ca.like(a.owner,ra,target);assertEquals(count,server.messages.size);assertEquals(0,ca.read(a.owner,ra).single().likes)
+        cb.send(b.owner,rb,"Reply",target);val reply=ca.read(a.owner,ra).last();assertEquals("reply",reply.type);assertEquals(a.owner,reply.quoteAuthor);assertEquals("Original 🧡",reply.quoteText)
+        val stored=server.messages.last();assertFalse(stored.content.contains("Reply"));assertFalse(stored.content.contains(target))
+        assertThrows(Exception::class.java){runBlocking{ca.like(a.owner,ra,stored.id+"bad")}}
+        // Emit public fixture bytes for the browser to verify native -> browser.
+        java.io.File("build/chat-actions-native-vector.json").writeText(JSONObject().put("period",ra.period).put("key",Base64.getEncoder().encodeToString(ra.key)).put("event",stored.json()).toString())
+    }
+
+    @Test fun repeatedUncertainReactionPreservesOperationAndSignerCancelAllowsEdit():Unit=runBlocking {
+        val signer=Signer();val server=Server();server.completed+=signer.owner;var failWrites=0
+        val api=ChatApi{path,event->if(path=="api/chat/send"&&failWrites>0){failWrites--;throw IOException("request delivery unknown")};server.post(path,event)}
+        val client=DailyChatClient(signer,api){server.now};val room=client.open(signer.owner)!!;val target=client.send(signer.owner,room,"Original")
+        failWrites=2
+        repeat(2){try{client.like(signer.owner,room,target);fail()}catch(_:IOException){}}
+        client.like(signer.owner,room,target);assertEquals(2,server.messages.size);assertTrue(client.read(signer.owner,room).single().liked)
+        signer.cancelled=true;try{client.send(signer.owner,room,"cancelled draft");fail()}catch(_:CancellationException){}
+        signer.cancelled=false;client.send(signer.owner,room,"edited draft");assertEquals(3,server.messages.size)
+        val action=JSONObject().put("v",2).put("type","reply").put("target","a".repeat(64)).put("text",42)
+        assertThrows(Exception::class.java){chatActionPayload(action)}
+        assertThrows(Exception::class.java){chatActionPayload(action.put("text","ok").put("target",42))}
+    }
+
+    @Test fun confirmedLocalSendThenDeltaRestoresServerReceiptOrder()=runBlocking {
+        val a=Signer();val b=Signer(2);val server=Server();server.completed+=listOf(a.owner,b.owner);server.delta=true
+        val ca=DailyChatClient(a,server){server.now};val cb=DailyChatClient(b,server){server.now};val ra=ca.open(a.owner)!!;val rb=cb.open(b.owner)!!
+        ca.send(a.owner,ra,"first");ca.read(a.owner,ra)
+        cb.send(b.owner,rb,"other before own");ca.send(a.owner,ra,"own confirmation")
+        assertEquals(listOf("first","other before own","own confirmation"),ca.read(a.owner,ra).map{it.text})
+    }
 }

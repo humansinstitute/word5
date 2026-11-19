@@ -1,3 +1,10 @@
+# 1.0.12 (13)
+
+- Tap private chat messages to Like/Unlike or Reply, with private encrypted reactions and a cancellable reply preview.
+- Show replies with a short quote and original author resolved from verified room messages, or an honest unavailable-original label.
+- Preserve room drafts, scroll, results and locally saved profiles/photos; deduplicate reaction actors and recover uncertain sends without duplicate toggles.
+- Read legacy messages; older clients omit the new encrypted replies/reactions. Shared room retention and send limits still apply.
+
 # 1.0.11 (12)
 
 - Keep successfully seen public profile details and actual avatar bytes on-device across rooms, accounts and process restarts.

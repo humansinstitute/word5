@@ -57,6 +57,7 @@ class ChatReviewActivity:ComponentActivity() {
                 val rooms=remember(owner){listOf(today,today-1).associateWith{period->ChatRoom(owner,period,java.time.LocalDate.ofEpochDay(period).toString(),if(period==today)"JOKER"else"CRANE",(period+2)*86400000,ByteArray(32){period.toByte()})}}
                 val scrolls=remember(owner){mutableMapOf<Long,ChatScrollMemory>()}
                 var drafts by remember(owner){mutableStateOf(mapOf<Long,String>())}
+                var replies by remember(owner){mutableStateOf(mapOf<Long,String?>())}
                 var rows by remember(owner){mutableStateOf(rooms.keys.associateWith{period->(1..16).map{index->ChatMessage("fixture-$period-$index",if(index%3==0)owner else other,System.currentTimeMillis()/1000-index,"${if(period==today)"Today"else"Yesterday"}: ${if(index%3==0)"I got there!"else"How did everyone find this word?"} · $index")}})}
                 LaunchedEffect(Unit){
                     val change=intent.getStringExtra("timedScope")
@@ -74,7 +75,7 @@ class ChatReviewActivity:ComponentActivity() {
                     ChatToolbar(selected,today,if(yesterdayOnly&&selected==today)null else rooms.getValue(selected),false,System.currentTimeMillis(),{finish()},{selected=it},{})
                     if(yesterdayOnly&&selected==today)Column(Modifier.padding(20.dp)){Copy("Today is not completed",20,bold=true);Copy("Yesterday’s verified room remains available using the button above.",13,Muted,modifier=Modifier.padding(top=12.dp))}
                     else if(expired)Copy("Room expired · profile closed",16)
-                    else ChatConversation(rooms.getValue(selected),owner,rows.getValue(selected),members,drafts[selected].orEmpty(),"",false,System.currentTimeMillis(),{drafts=drafts+(selected to it)},{rows=rows+(selected to (rows.getValue(selected)+ChatMessage("fixture-$selected-${rows.getValue(selected).size+1}",owner,System.currentTimeMillis()/1000,drafts[selected].orEmpty())));drafts=drafts+(selected to "")},{},{finish()},scrolls.getOrPut(selected){ChatScrollMemory()})
+                    else ChatConversation(rooms.getValue(selected),owner,rows.getValue(selected),members,drafts[selected].orEmpty(),"",false,System.currentTimeMillis(),{drafts=drafts+(selected to it)},{rows=rows+(selected to (rows.getValue(selected)+ChatMessage("fixture-$selected-${rows.getValue(selected).size+1}",owner,System.currentTimeMillis()/1000,drafts[selected].orEmpty(),type=if(replies[selected]!=null)"reply"else"text",target=replies[selected].orEmpty(),quoteAuthor=rows.getValue(selected).firstOrNull{it.id==replies[selected]}?.pubkey.orEmpty(),quoteText=rows.getValue(selected).firstOrNull{it.id==replies[selected]}?.text?.take(160).orEmpty())));drafts=drafts+(selected to "");replies=replies+(selected to null)},{},{finish()},scrolls.getOrPut(selected){ChatScrollMemory()},replies[selected],{replies=replies+(selected to it)},{target->rows=rows+(selected to rows.getValue(selected).map{if(it.id==target)it.copy(liked=!it.liked,likes=if(it.liked)it.likes-1 else it.likes+1)else it})})
                 }
             }
         }
