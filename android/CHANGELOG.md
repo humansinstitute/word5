@@ -1,3 +1,10 @@
+# 1.0.10 (11)
+
+- Show verified public profiles as soon as they arrive, without waiting for slow relays or EOSE.
+- Share and batch profile reads, retry partial batches and use bounded fallback lookup relays.
+- Retain a bounded signed public-profile cache across app restarts, refresh in the background and distinguish incomplete lookups from profiles absent on checked relays.
+- Accept verified public events with unsigned relay extension fields while keeping backup envelopes strict.
+
 # 1.0.9 (10)
 
 - Chat profiles show loading, offline, retry and missing states, automatically retry with delayed exponential backoff and jitter, and retain previously loaded names/photos.

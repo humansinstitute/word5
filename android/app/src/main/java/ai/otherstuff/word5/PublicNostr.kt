@@ -1,6 +1,7 @@
 package ai.otherstuff.word5
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -25,7 +26,7 @@ object PublicNostr {
             val data=JSONObject(String(r.body.byteStream().use { it.readBounded(4000000) },Charsets.UTF_8)); if(!r.isSuccessful || !data.optBoolean("ok"))throw ApiRejection(data.optString("error","Word5 request failed"),r.code);data
         }
     }
-    private suspend fun queryRelay(url: String, filter: JSONObject): List<Event> {
+    internal suspend fun queryRelay(url: String, filter: JSONObject): List<Event> {
         val result=CompletableDeferred<List<Event>>();val events=mutableListOf<Event>();val sub=UUID.randomUUID().toString()
         val socket=client.newWebSocket(Request.Builder().url(url).build(),object:WebSocketListener() {
             override fun onOpen(webSocket:WebSocket,response:Response) { webSocket.send(array(listOf("REQ",sub,filter)).toString()) }
@@ -35,7 +36,7 @@ object PublicNostr {
                     val msg=JSONArray(text)
                     if(msg.optString(1)!=sub)return
                     when(msg.optString(0)) {
-                        "EVENT" -> { val e=Event.parse(msg.getJSONObject(2));if(e.verified() && matches(e,filter)) synchronized(events) { if(events.size<2000)events.add(e) } }
+                        "EVENT" -> { val e=Event.parseRelay(msg.getJSONObject(2));if(e.verified() && matches(e,filter)) synchronized(events) { if(events.size<2000)events.add(e) } }
                         "EOSE" -> result.complete(synchronized(events){events.toList()})
                         "CLOSED" -> result.completeExceptionally(IllegalStateException(msg.optString(2,"Relay query refused")))
                     }
@@ -70,9 +71,13 @@ object PublicNostr {
         } }.awaitAll()
         check(outcomes.any { it }) { "No relay confirmed publication; retry" }
     }
-    /** Null means a completed relay query without usable metadata; exceptions mean transport failure. */
-    suspend fun chatProfile(owner:String):JSONObject? = query(JSONObject().put("kinds",array(listOf(0))).put("authors",array(listOf(owner))).put("limit",1)).firstOrNull()?.let { parseChatProfile(it.content) }
-    suspend fun profile(owner:String):JSONObject = query(JSONObject().put("kinds",array(listOf(0))).put("authors",array(listOf(owner))).put("limit",1)).firstOrNull()?.let { runCatching { JSONObject(it.content) }.getOrNull() } ?: JSONObject()
+    /** Metadata uses the shared verified public loader, independently of encrypted chat. */
+    suspend fun chatProfile(owner:String):JSONObject? {
+        var profile:JSONObject?=null
+        PublicProfiles.observe(owner).collect{u->u.event?.let{profile=parseChatProfile(it.content)};if(u.complete&&profile==null)check(u.allRelaysCompleted){"Profile relays incomplete; retry"}}
+        return profile
+    }
+    suspend fun profile(owner:String):JSONObject = chatProfile(owner)?:JSONObject()
     suspend fun contacts(owner:String):Event? = query(JSONObject().put("kinds",array(listOf(3))).put("authors",array(listOf(owner))).put("limit",1)).firstOrNull()
     suspend fun upload(bytes:ByteArray,mime:String,owner:String,signer:NativeSigner,message:String="Upload WORD5 profile image"):String {
         require(bytes.size<=10000000) { "Choose an image smaller than 10 MB" }

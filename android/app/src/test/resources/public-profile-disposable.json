@@ -1,0 +1,14 @@
+{
+  "kind": 0,
+  "created_at": 100,
+  "tags": [
+    [
+      "alt",
+      "Disposable Ελληνικά 😀"
+    ]
+  ],
+  "content": "{\"name\":\"Disposable Ελληνικά 😀\",\"about\":\"Quote \\\" and newline\\n preserved\",\"picture\":\"https://example.com/avatar.png\"}",
+  "pubkey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
+  "id": "5b8d3c11e21b9974e3728d5e7d23aa00b73eb73ac58d78020b7aaa9048a115a0",
+  "sig": "920d143ec8951ed7a14a86769d7462b7a84cfc752252bf40f848a879f1b4ba2bde1674c1284177aa9a645ea978ea8dc9d46c05d7b97567ecb0e714e0e5207f81"
+}

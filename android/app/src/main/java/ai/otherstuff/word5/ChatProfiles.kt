@@ -21,10 +21,15 @@ class ChatProfiles(private val clock:()->Long=System::currentTimeMillis, private
             if(v.ticket!=0L)continue
             if(!online){if(clock()>=v.due)values[key]=v.copy(state="offline");continue}
             if(clock()<v.due)continue
-            if(values.values.count{it.ticket!=0L}>=3)break
+            if(values.values.count{it.ticket!=0L}>=200)break
             val id=++serial;v=v.copy(state="loading",ticket=id);values[key]=v;reads+=Read(key,id)
         }
         trim();return reads
+    }
+    fun progress(read:Read,profile:JSONObject):Boolean {
+        val old=values[read.key]?:return false
+        if(old.ticket!=read.ticket)return false
+        values[read.key]=old.copy(profile=profile,state="ready");return true
     }
     fun finish(read:Read,profile:JSONObject?,failed:Boolean):Boolean {
         val old=values[read.key]?:return false
@@ -41,7 +46,7 @@ class ChatProfiles(private val clock:()->Long=System::currentTimeMillis, private
     }
 }
 fun safeProfilePicture(value:String):String = value.takeIf { it.length<=2048 && runCatching { java.net.URI(it).let{u->u.scheme=="https"&&!u.host.isNullOrBlank()&&u.userInfo==null&&u.port in listOf(-1,443)} }.getOrDefault(false) }.orEmpty()
-fun profileStatus(state:String)=when(state){"loading"->"Loading profile…";"retry"->"Profile unavailable · retrying later";"offline"->"Offline · profile retries when connected";"missing"->"No public profile · checking again later";else->""}
+fun profileStatus(state:String)=when(state){"loading"->"Loading profile…";"retry"->"Profile unavailable · retrying later";"offline"->"Offline · profile retries when connected";"missing"->"No profile found on checked relays · retrying later";else->""}
 
 fun parseChatProfile(content:String):JSONObject? = runCatching{JSONObject(content)}.getOrNull()?.takeIf{p->
     listOf("name","display_name","about").any{(p.opt(it) as? String)?.isNotBlank()==true} || safeProfilePicture((p.opt("picture") as? String).orEmpty()).isNotEmpty()

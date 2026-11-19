@@ -17,6 +17,10 @@ data class Event(val pubkey: String, val created: Long, val kind: Int, val tags:
     fun verified(): Boolean = runCatching { pubkey.length == 64 && id == hash() && sig.length == 128 && Secp256k1.verifySchnorr(unhex(sig), unhex(id), unhex(pubkey)) }.getOrDefault(false)
     fun samePayload(other: Event) = pubkey == other.pubkey && created == other.created && kind == other.kind && tags == other.tags && content == other.content
     companion object {
+        /** Relay extensions are unsigned; ignore them while retaining strict backup envelopes. */
+        fun parseRelay(j:JSONObject):Event = parse(JSONObject().also { clean->
+            listOf("pubkey","created_at","kind","tags","content","id","sig").forEach{clean.put(it,j.get(it))}
+        })
         fun parse(j: JSONObject): Event {
             j.exact("pubkey", "created_at", "kind", "tags", "content", "id", "sig")
             require(listOf("pubkey", "content", "id", "sig").all { j.get(it) is String })

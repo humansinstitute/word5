@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.collect
 
 /** Debug-package-only two-room review; no signer, chat API or release data access. */
 class ChatReviewActivity:ComponentActivity() {
@@ -21,7 +22,7 @@ class ChatReviewActivity:ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme=darkColorScheme(primary=Purple,background=Background,surface=Panel)) {
                 val today=Rules.period();var identity by remember{mutableStateOf(false)}
-                val owner=if(identity)"c".repeat(64)else"a".repeat(64);val other="b".repeat(64)
+                val owner=if(identity)"c".repeat(64)else"a".repeat(64);val other=intent.getStringExtra("publicKey")?.takeIf{it.matches(Regex("[0-9a-f]{64}"))}?:"b".repeat(64)
                 var profileMode by remember{mutableIntStateOf(intent.getIntExtra("profileMode",0))}
                 var expired by remember{mutableStateOf(false)}
                 var fixtureNow by remember{mutableLongStateOf(System.currentTimeMillis())}
@@ -29,7 +30,16 @@ class ChatReviewActivity:ComponentActivity() {
                 var profileVersion by remember{mutableIntStateOf(0)}
                 LaunchedEffect(profileMode,identity){
                     profiles.clear();fixtureNow=System.currentTimeMillis()
-                    if(profileMode==0) {
+                    if(profileMode==6) {
+                        PublicProfiles.initialize(filesDir)
+                        val read=profiles.begin(listOf(other),true).single();profileVersion++
+                        PublicProfiles.observe(other).collect { u->
+                            val p=u.event?.let{parseChatProfile(it.content)}
+                            if(u.complete)profiles.finish(read,p,p==null&&!u.allRelaysCompleted)
+                            else if(p!=null)profiles.progress(read,p)
+                            profileVersion++
+                        }
+                    }else if(profileMode==0) {
                         val read=profiles.begin(listOf(other),true).single();profileVersion++
                         kotlinx.coroutines.delay(5000);profiles.finish(read,null,true);profileVersion++
                         kotlinx.coroutines.delay(5000);fixtureNow+=2200
@@ -52,7 +62,7 @@ class ChatReviewActivity:ComponentActivity() {
                 Column(Modifier.fillMaxSize().background(Background).safeDrawingPadding()) {
                     Copy("REVIEW FIXTURE · no chat API or signer",10,Orange,modifier=Modifier.fillMaxWidth().padding(8.dp))
                     if(profileReview)Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly){
-                        WebButton("State $profileMode",compact=true){profileMode=(profileMode+1)%6}
+                        WebButton("State $profileMode",compact=true){profileMode=(profileMode+1)%7}
                         WebButton("Identity",compact=true){identity=!identity}
                         WebButton("Expire",compact=true){expired=true}
                     }

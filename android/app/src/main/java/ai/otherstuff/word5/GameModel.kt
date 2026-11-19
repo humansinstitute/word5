@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import java.io.File
 
 private data class ChatRoomView(val room:ChatRoom,val messages:List<ChatMessage> = emptyList(),val members:Map<String,ChatMember> = emptyMap(),val draft:String="")
@@ -65,7 +66,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
     private var chatJob: Job?=null
     private var chatMetadataJob: Job?=null
     private val chatClient=DailyChatClient(amber)
-    init { load(); if(owner.isNotEmpty()) message = "Backup pending; reconnecting automatically."; viewModelScope.launch { delay(500); if(completed()) openResult() } }
+    init { PublicProfiles.initialize(app.filesDir); load(); if(owner.isNotEmpty()) message = "Backup pending; reconnecting automatically."; viewModelScope.launch { delay(500); if(completed()) openResult() } }
     private fun file(key: String = owner) = File(getApplication<Application>().filesDir, "state-${key.ifEmpty { "guest" }}.json")
     private fun load() {
         profileName = prefs.getString("name-$owner", "").orEmpty(); profilePicture = prefs.getString("picture-$owner", "").orEmpty(); syncEnabled=prefs.getBoolean("auto-sync-$owner",true)
@@ -352,11 +353,16 @@ class GameModel(app: Application): AndroidViewModel(app) {
         if(reads.isEmpty())return
         chatMetadataJob=viewModelScope.launch {
             reads.forEach{read->launch {
-                var failed=false
-                val profile=try{PublicNostr.chatProfile(read.key)}catch(e:CancellationException){throw e}catch(_:Exception){failed=true;null}
-                if(owner==account&&chatEpoch==epoch&&chatRoom===room&&chatVisible&&room.active(owner,System.currentTimeMillis())){
-                    chatProfiles.finish(read,profile,failed);update()
-                }
+                try {
+                    PublicProfiles.observe(read.key).collect { result ->
+                        if(owner==account&&chatEpoch==epoch&&chatRoom===room&&chatVisible&&room.active(owner,System.currentTimeMillis())) {
+                            val profile=result.event?.let{parseChatProfile(it.content)}
+                            if(result.complete)chatProfiles.finish(read,profile,profile==null&&!result.allRelaysCompleted)
+                            else if(profile!=null)chatProfiles.progress(read,profile)
+                            update()
+                        }
+                    }
+                }catch(e:CancellationException){throw e}catch(_:Exception){chatProfiles.finish(read,null,true);update()}
             }}
         }
     }

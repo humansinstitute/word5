@@ -5,6 +5,15 @@ import org.junit.Test
 import org.json.JSONObject
 
 class ChatProfilesTest {
+    @Test fun progressiveDisplayKeepsTicketAndRejectsCancelledOrPublishedResults(){
+        var now=0L;val c=ChatProfiles({now},{0.5});val r=c.begin(listOf("a"),true).single()
+        assertTrue(c.progress(r,JSONObject().put("name","First")))
+        assertEquals("ready",c.value("a").state);assertTrue(c.begin(listOf("a"),true).isEmpty())
+        c.finish(r,null,true);assertEquals("First",c.value("a").profile!!.getString("name"))
+        now=c.value("a").due;val cancelled=c.begin(listOf("a"),true).single();c.cancel();assertFalse(c.progress(cancelled,JSONObject().put("name","Late")))
+        val next=c.begin(listOf("a"),true).single();c.put("a",JSONObject().put("name","Published"))
+        assertFalse(c.progress(next,JSONObject().put("name","Older")))
+    }
     @Test fun delayedExponentialJitterAndRecovery(){
         var now=1000L;val cache=ChatProfiles({now},{0.5});val key="a"
         val first=cache.begin(listOf(key,key),true).single()
@@ -30,11 +39,11 @@ class ChatProfilesTest {
     }
     @Test fun concurrencyDedupOfflineAndCancelledTickets(){
         val c=ChatProfiles({0},{0.5});val keys=(1..200).map{it.toString()}
-        val pending=c.begin(keys+keys,true);assertEquals(3,pending.size)
+        val pending=c.begin(keys+keys,true);assertEquals(200,pending.size)
         assertTrue(c.begin(keys,true).isEmpty());c.cancel()
         assertFalse(c.finish(pending[0],JSONObject(),false))
         assertTrue(c.begin(keys,false).isEmpty());assertEquals("offline",c.value("1").state)
-        assertEquals(3,c.begin(keys,true).size)
+        assertEquals(200,c.begin(keys,true).size)
         c.clear();assertFalse(c.finish(pending[1],JSONObject(),false));assertNull(c.value("1").profile)
     }
     @Test fun publishWinsOverPendingReadAndCacheIsBounded(){
