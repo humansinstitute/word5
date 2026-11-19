@@ -70,6 +70,8 @@ object PublicNostr {
         } }.awaitAll()
         check(outcomes.any { it }) { "No relay confirmed publication; retry" }
     }
+    /** Null means a completed relay query without usable metadata; exceptions mean transport failure. */
+    suspend fun chatProfile(owner:String):JSONObject? = query(JSONObject().put("kinds",array(listOf(0))).put("authors",array(listOf(owner))).put("limit",1)).firstOrNull()?.let { parseChatProfile(it.content) }
     suspend fun profile(owner:String):JSONObject = query(JSONObject().put("kinds",array(listOf(0))).put("authors",array(listOf(owner))).put("limit",1)).firstOrNull()?.let { runCatching { JSONObject(it.content) }.getOrNull() } ?: JSONObject()
     suspend fun contacts(owner:String):Event? = query(JSONObject().put("kinds",array(listOf(3))).put("authors",array(listOf(owner))).put("limit",1)).firstOrNull()
     suspend fun upload(bytes:ByteArray,mime:String,owner:String,signer:NativeSigner,message:String="Upload WORD5 profile image"):String {

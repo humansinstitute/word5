@@ -24,16 +24,16 @@ import okhttp3.Request
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
-private val socialImages=OkHttpClient.Builder().connectTimeout(10,TimeUnit.SECONDS).readTimeout(15,TimeUnit.SECONDS).build()
+private val socialImages=OkHttpClient.Builder().followSslRedirects(false).connectTimeout(10,TimeUnit.SECONDS).readTimeout(15,TimeUnit.SECONDS).build()
 /** Decode bounded public images off the UI thread; no image request is an upload. */
-suspend fun socialBitmap(url:String):Bitmap? = withContext(Dispatchers.IO) {
-    if(!url.startsWith("https://"))return@withContext null
+suspend fun socialBitmap(url:String,maxDimension:Int=1200):Bitmap? = withContext(Dispatchers.IO) {
+    if(safeProfilePicture(url).isEmpty())return@withContext null
     runCatching {
         socialImages.newCall(Request.Builder().url(url).build()).execute().use { r->
             check(r.isSuccessful);val bytes=r.body.byteStream().use{it.readBounded(5000000)}
             val bounds=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeByteArray(bytes,0,bytes.size,bounds)
             require(bounds.outWidth in 1..16000 && bounds.outHeight in 1..16000)
-            val options=BitmapFactory.Options().apply{inSampleSize=maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/1200)}
+            val options=BitmapFactory.Options().apply{inSampleSize=maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/maxDimension)}
             BitmapFactory.decodeByteArray(bytes,0,bytes.size,options)
         }
     }.getOrNull()
@@ -85,4 +85,23 @@ suspend fun renderDuelCard(left:SocialIdentity,right:SocialIdentity,leftScore:In
     text("${left.name} vs ${right.name}",600f,630f,34f,0xD1FFFFFF.toInt(),true)
     text("${java.time.LocalDate.now(java.time.ZoneOffset.UTC).format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))} · otherstuff.ai/word5",600f,660f,22f,0x6BFFFFFF)
     ByteArrayOutputStream().use{out->bitmap.compress(Bitmap.CompressFormat.PNG,100,out);bitmap.recycle();out.toByteArray()}
+}
+
+private data class ChatImage(val bitmap:Bitmap?,val time:Long)
+private val chatImageCache=android.util.LruCache<String,ChatImage>(32)
+private class ChatImageLock(val mutex:kotlinx.coroutines.sync.Mutex=kotlinx.coroutines.sync.Mutex(),var users:Int=0)
+private val chatImageLocks=mutableMapOf<String,ChatImageLock>()
+private val chatImagePermits=kotlinx.coroutines.sync.Semaphore(3)
+/** Separate bounded, deduplicated public-profile image reads; a broken picture retains initials. */
+suspend fun chatProfileBitmap(url:String):Bitmap? {
+    if(safeProfilePicture(url).isEmpty())return null
+    val lock=synchronized(chatImageLocks){chatImageLocks.getOrPut(url){ChatImageLock()}.also{it.users++}}
+    try {
+        lock.mutex.lock()
+        try {
+            chatImageCache.get(url)?.takeIf{it.bitmap!=null||System.currentTimeMillis()-it.time<60000}?.let{return it.bitmap}
+            chatImagePermits.acquire()
+            try {return socialBitmap(url,256).also{chatImageCache.put(url,ChatImage(it,System.currentTimeMillis()))}}finally{chatImagePermits.release()}
+        }finally{lock.mutex.unlock()}
+    }finally{synchronized(chatImageLocks){lock.users--;if(lock.users==0)chatImageLocks.remove(url)}}
 }

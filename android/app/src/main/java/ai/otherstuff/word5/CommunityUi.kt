@@ -74,7 +74,7 @@ fun copyText(context:Context,text:String) { (context.getSystemService(Context.CL
                     if(!loaded)m.notify("Load your existing profile before saving") else m.publicAction { owner ->
                         val chosen=imageUri;val url=if(chosen==null)picture else { val bytes=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { context.contentResolver.openInputStream(chosen)!!.use { input->val b=input.readNBytesBounded(10000001);require(b.size<=10000000);b } };PublicNostr.upload(bytes,context.contentResolver.getType(chosen)?:"image/jpeg",owner,m.amber) }
                         val data=JSONObject(original.toString()).put("name",name).put("display_name",name).put("about",about).put("picture",url)
-                        PublicNostr.publish(m.amber.sign(Event(owner,System.currentTimeMillis()/1000,0,emptyList(),data.toString())));"Profile published"
+                        PublicNostr.publish(m.amber.sign(Event(owner,System.currentTimeMillis()/1000,0,emptyList(),data.toString())));m.chatProfilePublished(owner,data);"Profile published"
                     }
                 }
             }

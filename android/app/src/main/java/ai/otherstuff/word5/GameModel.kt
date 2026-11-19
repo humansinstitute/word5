@@ -57,7 +57,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
     val chatMessages get()=chatViews[selectedChatPeriod]?.messages.orEmpty()
     val chatMembers get()=chatViews[selectedChatPeriod]?.members.orEmpty()
     val chatDraft get()=chatViews[selectedChatPeriod]?.draft.orEmpty()
-    private val chatProfiles=linkedMapOf<String,org.json.JSONObject>()
+    private val chatProfiles=ChatProfiles()
     var chatStatus by mutableStateOf("Finish today’s puzzle to unlock its chat."); private set
     var chatBusy by mutableStateOf(false); private set
     private var chatVisible=false
@@ -245,9 +245,9 @@ class GameModel(app: Application): AndroidViewModel(app) {
         check(owner==account); PublicNostr.api("api/completion",event)
     }
     fun editChat(text:String) { chatTick();val view=chatViews[selectedChatPeriod]?:return;chatViews=chatViews+(selectedChatPeriod to view.copy(draft=text.take(2000))) }
-    fun setChatVisible(visible:Boolean) { chatVisible=visible;chatTick();if(!visible&&!chatBusy)sync() }
+    fun setChatVisible(visible:Boolean,syncWhenHidden:Boolean=true) { chatVisible=visible;if(!visible){chatMetadataJob?.cancel();chatProfiles.cancel()};chatTick();if(!visible&&syncWhenHidden&&!chatBusy)sync() }
     private fun stopChatAction() {
-        chatEpoch++;chatJob?.cancel();chatMetadataJob?.cancel();chatClient.cancelRequests()
+        chatEpoch++;chatJob?.cancel();chatMetadataJob?.cancel();chatProfiles.cancel();chatClient.cancelRequests()
         if(chatBusy){amber.cancel();amber.interactive=false};chatBusy=false
     }
     fun chatTick() {
@@ -256,6 +256,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
         expired.forEach{chatClient.forget(it.room);it.room.discard()}
         if(expired.isNotEmpty())chatViews=chatViews-expired.map{it.room.period}.toSet()
         chatClient.prune(owner)
+        if(chatVisible)chatRoom?.let{loadChatMembers(owner,chatEpoch,it,chatMessages)}
         if(selectedChatPeriod !in (Rules.period()-1)..Rules.period()) {
             stopChatAction();selectedChatPeriod=Rules.period();chatStatus="Yesterday’s chat has closed. Finish today’s puzzle to join its room."
         }
@@ -286,7 +287,7 @@ class GameModel(app: Application): AndroidViewModel(app) {
     }
     private fun currentChat(account:String,epoch:Int,period:Long){check(owner==account&&chatEpoch==epoch&&selectedChatPeriod==period&&period in (Rules.period()-1)..Rules.period()){ "Chat account, selection or expiry changed" }}
     private fun installChatRooms(rooms:List<ChatRoom>) {
-        chatMetadataJob?.cancel()
+        chatMetadataJob?.cancel();chatProfiles.cancel()
         val next=rooms.associate{room->
             val old=chatViews[room.period]
             val retained=old?.takeIf{it.room.owner==room.owner&&it.room.key.contentEquals(room.key)}
@@ -334,26 +335,36 @@ class GameModel(app: Application): AndroidViewModel(app) {
         val rows=chatClient.read(account,room);currentChat(account,epoch,period)
         val old=chatViews[period]?:return;if(old.room!==room)return
         val outcomes=chatClient.results(account,room)
-        val members=rows.map{it.pubkey}.distinct().associateWith{pubkey->chatRoomMember(chatProfiles[pubkey],old.members[pubkey],outcomes[pubkey].orEmpty())}
+        val members=rows.map{it.pubkey}.distinct().associateWith{pubkey->chatRoomMember(chatProfiles.value(pubkey).profile,old.members[pubkey],outcomes[pubkey].orEmpty()).copy(profileState=chatProfiles.value(pubkey).state)}
         chatViews=chatViews+(period to old.copy(messages=rows,members=members));chatStatus="";loadChatMembers(account,epoch,room,rows)
     }
     private fun loadChatMembers(account:String,epoch:Int,room:ChatRoom,rows:List<ChatMessage>){
-        val missing=rows.map{it.pubkey}.distinct().filter{it !in chatProfiles};if(missing.isEmpty()||chatMetadataJob?.isActive==true)return
-        chatMetadataJob=viewModelScope.launch{
-            val permits=kotlinx.coroutines.sync.Semaphore(3)
-            missing.forEach{pubkey->launch{
-                permits.acquire()
-                try{
-                    val profile=try{withTimeout(6000){PublicNostr.profile(pubkey)}}catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;null}catch(_:Exception){null}
-                    if(owner==account&&chatEpoch==epoch&&chatRoom===room&&room.active(owner,System.currentTimeMillis())){
-                        if(chatProfiles.size>=256)chatProfiles.remove(chatProfiles.keys.first());chatProfiles[pubkey]=profile?:org.json.JSONObject()
-                        val view=chatViews[room.period]?:return@launch
-                        val member=chatRoomMember(profile,null,chatClient.results(account,room)[pubkey].orEmpty())
-                        chatViews=chatViews+(room.period to view.copy(members=view.members+(pubkey to member)))
-                    }
-                }finally{permits.release()}
+        if(!chatVisible||chatMetadataJob?.isActive==true)return
+        val keys=rows.map{it.pubkey}.distinct()
+        val reads=chatProfiles.begin(keys,profileOnline())
+        fun update(){
+            if(owner!=account||chatEpoch!=epoch||chatRoom!==room||!chatVisible||!room.active(owner,System.currentTimeMillis()))return
+            val view=chatViews[room.period]?:return
+            val members=view.messages.map{it.pubkey}.distinct().associateWith{key->val v=chatProfiles.value(key);chatRoomMember(v.profile,view.members[key],view.members[key]?.result.orEmpty()).copy(profileState=v.state)}
+            chatViews=chatViews+(room.period to view.copy(members=members))
+        }
+        update()
+        if(reads.isEmpty())return
+        chatMetadataJob=viewModelScope.launch {
+            reads.forEach{read->launch {
+                var failed=false
+                val profile=try{PublicNostr.chatProfile(read.key)}catch(e:CancellationException){throw e}catch(_:Exception){failed=true;null}
+                if(owner==account&&chatEpoch==epoch&&chatRoom===room&&chatVisible&&room.active(owner,System.currentTimeMillis())){
+                    chatProfiles.finish(read,profile,failed);update()
+                }
             }}
         }
     }
+    fun chatProfilePublished(account:String,data:org.json.JSONObject){if(owner==account){chatProfiles.put(account,data);chatRoom?.let{loadChatMembers(owner,chatEpoch,it,chatMessages)}}}
+    private fun profileOnline():Boolean {
+        val cm=getApplication<android.app.Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        return cm.activeNetwork?.let{cm.getNetworkCapabilities(it)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)}==true
+    }
+
     fun shareText(): String = resultShareText(state,rules)
 }

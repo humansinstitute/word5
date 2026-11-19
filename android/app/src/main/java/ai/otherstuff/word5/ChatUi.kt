@@ -12,6 +12,10 @@ import androidx.compose.runtime.*
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
@@ -23,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -58,7 +63,11 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     var now by remember{mutableLongStateOf(System.currentTimeMillis())}
     val scrolls=remember(m.owner){mutableMapOf<Long,ChatScrollMemory>()}
     val lifecycle=LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(Unit){m.setChatVisible(true);onDispose{m.setChatVisible(false)}}
+    DisposableEffect(lifecycle){
+        val observer=androidx.lifecycle.LifecycleEventObserver{_,_->m.setChatVisible(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),syncWhenHidden=false)}
+        lifecycle.addObserver(observer);m.setChatVisible(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),syncWhenHidden=false)
+        onDispose{lifecycle.removeObserver(observer);m.setChatVisible(false)}
+    }
     LaunchedEffect(m.owner){if(m.owner.isNotEmpty()&&m.chatRoom==null)m.openChat()}
     LaunchedEffect(Unit){var ticks=0;while(true){delay(1000);now=System.currentTimeMillis();m.chatTick();ticks++;if(ticks%10==0&&lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)&&m.chatRoom!=null)m.refreshChat(false)}}
     val today=Rules.period(now);val yesterday=m.selectedChatPeriod==today-1
@@ -101,6 +110,15 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
 
 /** Native-only view; debug review fixtures cannot call a signer or API. */
 @Composable fun ChatConversation(room:ChatRoom,owner:String,messages:List<ChatMessage>,members:Map<String,ChatMember>,draft:String,status:String,busy:Boolean,now:Long,onDraft:(String)->Unit,onSend:()->Unit,onRefresh:()->Unit,onBack:()->Unit,scroll:ChatScrollMemory?=null) {
+    var selectedProfile by remember(room,owner){mutableStateOf<String?>(null)}
+    var profileFocus by remember(room,owner){mutableStateOf<FocusRequester?>(null)}
+    val profileScope=rememberCoroutineScope()
+    val lifecycle=LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle,room,owner){
+        val observer=androidx.lifecycle.LifecycleEventObserver{_,event->if(event==Lifecycle.Event.ON_PAUSE)selectedProfile=null}
+        lifecycle.addObserver(observer);onDispose{lifecycle.removeObserver(observer)}
+    }
+    LaunchedEffect(now){if(!room.active(owner,now))selectedProfile=null}
     val memory=scroll?:remember(room.owner,room.period){ChatScrollMemory()};val list=memory.list
     LaunchedEffect(room.period,messages.lastOrNull()?.id){
         val last=messages.lastOrNull()?.id
@@ -112,7 +130,7 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
     Column(Modifier.fillMaxSize().imePadding()) {
         if(messages.isEmpty())Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp),contentAlignment=Alignment.Center){Column(horizontalAlignment=Alignment.CenterHorizontally){Copy("You made it. Let’s talk.",18,bold=true);Copy("How did you find today’s word? Be the first to start the conversation.",13,Muted,modifier=Modifier.padding(top=12.dp))}}
         else LazyColumn(Modifier.weight(1f).fillMaxWidth(),state=list,contentPadding=PaddingValues(12.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            items(messages,key={it.id}){message->ChatMessageRow(message,members[message.pubkey],message.pubkey==owner)}
+            items(messages,key={it.id}){message->ChatMessageRow(message,members[message.pubkey],message.pubkey==owner){focus->profileFocus=focus;selectedProfile=message.pubkey}}
         }
         Column(Modifier.fillMaxWidth().background(Panel).padding(12.dp)) {
             if(status.isNotEmpty())Copy(status,12,Color(0xFFD8B4FE),modifier=Modifier.padding(bottom=10.dp))
@@ -126,11 +144,13 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
             Copy("Encrypted group · tap room title for details",10,Muted,modifier=Modifier.padding(top=8.dp))
         }
     }
+    selectedProfile?.let{key->ChatProfileDialog(key,members[key]?:ChatMember(profileState="loading")){selectedProfile=null;profileScope.launch{withFrameNanos{};runCatching{profileFocus?.requestFocus()}}}}
 }
-@Composable private fun ChatMessageRow(message:ChatMessage,member:ChatMember?,own:Boolean) {
+@Composable private fun ChatMessageRow(message:ChatMessage,member:ChatMember?,own:Boolean,onProfile:(FocusRequester)->Unit) {
+    val focus=remember(message.id){FocusRequester()}
     val name=member?.name.orEmpty().ifEmpty{if(own)"You" else message.pubkey.take(6)+"…"+message.pubkey.takeLast(4)}
     Row(Modifier.fillMaxWidth(),horizontalArrangement=if(own)Arrangement.End else Arrangement.Start,verticalAlignment=Alignment.Bottom){
-        if(!own)Avatar(member?.picture.orEmpty(),name,Modifier.padding(end=8.dp).size(32.dp))
+        if(!own)ChatAvatar(member?.picture.orEmpty(),name,Modifier.padding(end=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
         Column(Modifier.widthIn(max=300.dp).weight(1f,fill=false)) {
             Row(Modifier.padding(horizontal=4.dp).fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                 Text(name,maxLines=1,overflow=TextOverflow.Ellipsis,fontSize=11.sp,color=Color(0xFFD6CBDD),modifier=Modifier.weight(1f))
@@ -138,8 +158,40 @@ class ChatScrollMemory(val list:LazyListState=LazyListState()) {
                 member?.result?.takeIf{it.isNotEmpty()}?.let { result->Copy("$result/6",11,Color(0xFFD8B4FE),true,Modifier.semantics{contentDescription=if(result=="X")"6 guesses · not solved"else"$result of 6 guesses"}) }
                 Copy(DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(message.createdAt)),10,Muted)
             }
+            Text(profileStatus(member?.profileState?:"loading"),fontSize=10.sp,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().height(20.dp).padding(horizontal=4.dp,vertical=3.dp))
             Copy(message.text,14,modifier=Modifier.padding(top=6.dp).background(if(own)Color(0xFF7036AD)else Color(0xFF28232E),RoundedCornerShape(topStart=16.dp,topEnd=16.dp,bottomStart=if(own)16.dp else 4.dp,bottomEnd=if(own)4.dp else 16.dp)).border(1.dp,if(own)Color(0xFF8547C2)else Color(0xFF3C3443),RoundedCornerShape(topStart=16.dp,topEnd=16.dp,bottomStart=if(own)16.dp else 4.dp,bottomEnd=if(own)4.dp else 16.dp)).padding(12.dp))
         }
-        if(own)Avatar(member?.picture.orEmpty(),name,Modifier.padding(start=8.dp).size(32.dp))
+        if(own)ChatAvatar(member?.picture.orEmpty(),name,Modifier.padding(start=8.dp).size(40.dp).focusRequester(focus).clickable(role=androidx.compose.ui.semantics.Role.Button,onClickLabel="View profile",onClick={onProfile(focus)}))
+    }
+}
+
+/** Always retains initials underneath failed or loading pictures. */
+@Composable private fun ChatAvatar(url:String,name:String,modifier:Modifier=Modifier){
+    Box(modifier.background(Border,androidx.compose.foundation.shape.CircleShape).semantics{contentDescription="Profile photo for $name"},contentAlignment=Alignment.Center){
+        Copy(name.take(1).uppercase().ifEmpty{"?"},18,bold=true)
+        var bitmap by remember(url){mutableStateOf<android.graphics.Bitmap?>(null)}
+        LaunchedEffect(url){bitmap=chatProfileBitmap(url)}
+        bitmap?.let{androidx.compose.foundation.Image(it.asImageBitmap(),"Profile photo for $name",Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.CircleShape),contentScale=androidx.compose.ui.layout.ContentScale.Crop)}
+    }
+}
+@Composable fun ChatProfileDialog(pubkey:String,member:ChatMember,close:()->Unit){
+    val clipboard=androidx.compose.ui.platform.LocalClipboard.current
+    val scope=rememberCoroutineScope()
+    var copied by remember(pubkey){mutableStateOf(false)}
+    val npub=encodeNpub(pubkey)
+    val copyFocus=remember(pubkey){FocusRequester()}
+    androidx.compose.ui.window.Dialog(onDismissRequest=close){
+        LaunchedEffect(pubkey){withFrameNanos{};copyFocus.requestFocus()}
+        Column(Modifier.widthIn(max=360.dp).heightIn(max=520.dp).background(Panel,RoundedCornerShape(18.dp)).padding(20.dp).verticalScroll(rememberScrollState()),horizontalAlignment=Alignment.CenterHorizontally){
+            ChatAvatar(member.picture,member.name,Modifier.size(72.dp))
+            Text(member.name.ifEmpty{"Nostr profile"},fontSize=20.sp,color=Color.White,modifier=Modifier.padding(top=12.dp),maxLines=3,overflow=TextOverflow.Ellipsis)
+            profileStatus(member.profileState).takeIf{it.isNotEmpty()}?.let{Copy(it,12,Muted,modifier=Modifier.padding(top=8.dp))}
+            Copy(member.bio.ifEmpty{"No public bio"},13,Muted,modifier=Modifier.fillMaxWidth().padding(top=12.dp))
+            androidx.compose.foundation.text.selection.SelectionContainer{Copy(npub,12,modifier=Modifier.fillMaxWidth().padding(top=16.dp))}
+            WebButton(if(copied)"Copied npub"else"Copy npub",Modifier.fillMaxWidth().padding(top=12.dp).focusRequester(copyFocus)){
+                scope.launch { clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(android.content.ClipData.newPlainText("Nostr public key",npub)));copied=true }
+            }
+            WebButton("Close",Modifier.fillMaxWidth().padding(top=8.dp),onClick=close)
+        }
     }
 }

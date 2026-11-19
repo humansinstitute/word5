@@ -30,7 +30,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 
 Run `bun run test` from the repository root for the server regressions. Android unit tests cover daily browser parity, duplicate letters/hard mode, strict schema/account validation, archive limits, legacy overlap, consuming restore/CAS/account isolation, server signature failure and offline reads. The signer double in consuming tests is disposable test infrastructure; it does not prove real Amber permissions or a physical-device roundtrip.
 
-For a signed release set `WORD5_KEYSTORE`, `WORD5_STORE_PASSWORD`, and `WORD5_KEY_PASSWORD` in a protected environment; the alias is `word5`. Then run `./gradlew :app:assembleRelease :app:lintRelease`. Signing material must remain outside the checkout. Never use the debug certificate for publication. `tools/CertificateProof.java` emits public certificate and C1 app-key proof metadata for the release custodian; it does not provide the owner's Nostr signature or publish anything.
+Run signed releases only through the established protected build wrapper, which consumes the external signing configuration inside its build process and runs release assembly and lint. The key alias is `word5`. Never inspect, print or export credential contents through ad hoc commands; signing material stays outside the checkout. Never use the debug certificate for publication. `tools/CertificateProof.java` emits public certificate and C1 app-key proof metadata for the release custodian; it does not provide the owner's Nostr signature or publish anything.
 
 The Zapstore manifest deliberately has no license declaration because the repository supplies none. Before publication, review the exact APK hash/certificate, upload and verify public bytes, sign through the authorized owner's AP Vault, and verify relay admission and catalog listing. A build or simulated signer test alone is not release approval.
 
@@ -77,3 +77,12 @@ The manifest uses `@mipmap/ic_launcher` for both `icon` and `roundIcon`. Android
 When updating artwork, inspect both a circle and a squircle mask over the central 72 dp of the 108 dp layers, and keep essential foreground details within the central 66 dp safe circle. Check the merged release manifest and packaged resources, then run the app’s documented release build and lint. Launcher caches may need a normal refresh after an in-place update; never uninstall or clear user data to refresh an icon.
 
 The code8 reconciliation contract is documented in [history-reconciliation.md](../doc/history-reconciliation.md). Public score, streak, comparison and league screens consume the accepted server projection, with UTC windows and explicit public-only scope. Release readiness does not imply server activation or Zapstore publication.
+
+
+## Reliable chat public profiles
+
+Chat metadata uses a memory-only 256-entry cache with at most three concurrent profile queries. Relay EOSE without usable kind 0 metadata is a missing profile (60-second negative TTL); transport failures retry automatically from 2 seconds with exponential delay capped at 120 seconds before ±25% jitter. Successful profiles refresh after ten minutes, retaining stale values on failures or later missing responses. Offline reads wait for connectivity. These public reads never invoke Amber.
+
+Avatar buttons open a small read-only photo/name/bio/full npub dialog with Copy and Close. Metadata renders as plain bounded text; pictures require HTTPS without credentials or nonstandard ports, and transport cannot redirect to HTTP. Broken pictures retain initials. Closing restores the conversation; room/account changes, expiry and app pause dismiss the popup and cancel metadata work. Own-profile publishing remains in the existing editor and supersedes pending older chat reads.
+
+`ChatProfilesTest` covers backoff/jitter, delayed retries, negative/success TTL, stale success, deduplication/concurrency, offline recovery, cancellation and publish races, bounds and hostile metadata. Debug `ChatReviewActivity` accepts `profiles=true` for simulated loading/failure/recovery, offline/missing metadata, hostile text and broken/real public pictures. It uses no chat API or signer; image modes may fetch public HTTPS images. State, Identity and Expire controls are fixture-only. Real Amber, authenticated chat and Zapstore upgrade verification remain separate from fixture checks.

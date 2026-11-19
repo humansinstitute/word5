@@ -1,3 +1,9 @@
+# 1.0.9 (10)
+
+- Chat profiles show loading, offline, retry and missing states, automatically retry with delayed exponential backoff and jitter, and retain previously loaded names/photos.
+- Tap a chat avatar for a read-only photo, name, bio and full copyable npub. Unsafe or broken images retain a fallback.
+- Profile reads are bounded and cancelled across room, account and lifecycle changes; message results, drafts and scroll stay independent.
+
 # 1.0.8 (9)
 
 - Collapse chat navigation into one compact toolbar, leaving more room for messages with the keyboard open.

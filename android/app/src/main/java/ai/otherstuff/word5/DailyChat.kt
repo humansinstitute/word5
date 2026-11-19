@@ -23,13 +23,13 @@ class ChatRoom(val owner: String, val period: Long, val date: String, val word: 
     fun discard() { discarded=true;key.fill(0) }
 }
 data class ChatMessage(val id: String, val pubkey: String, val createdAt: Long, val text: String)
-data class ChatMember(val name: String = "", val picture: String = "", val result: String = "")
+data class ChatMember(val name: String = "", val picture: String = "", val result: String = "", val bio:String = "", val profileState:String = "ready")
 fun chatMember(profile: JSONObject?, history: JSONObject?, pubkey: String, period: Long): ChatMember {
     fun text(data: JSONObject?, key: String) = (data?.opt(key) as? String).orEmpty()
     val name = (text(profile,"display_name").trim().ifEmpty { text(profile,"name").trim() }).take(64)
-    val photo = text(profile,"picture").takeIf { value -> runCatching { java.net.URI(value).let { it.scheme == "https" && it.host != null && it.userInfo == null } }.getOrDefault(false) }.orEmpty()
+    val photo = safeProfilePicture(text(profile,"picture"))
     val result = text(history,"currentResult").takeIf { history?.optBoolean("ok") == true && text(history,"pubkey") == pubkey && history.optLong("periodId",-1) == period && history.optBoolean("completed") && it.matches(Regex("[1-6X]")) }.orEmpty()
-    return ChatMember(name,photo,result)
+    return ChatMember(name,photo,result,text(profile,"about").take(2000))
 }
 fun chatRoomMember(profile:JSONObject?,fallback:ChatMember?,result:String):ChatMember =
     (if(profile!=null)chatMember(profile,null,"",0)else fallback?:ChatMember()).copy(result=result.takeIf{it.matches(Regex("[1-6X]"))}.orEmpty())
